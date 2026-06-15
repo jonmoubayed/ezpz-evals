@@ -148,6 +148,21 @@ Issues and PRs welcome. Dev setup: `pip install -e ".[dev]"`. Before pushing, ru
 subclass plus an `@register` decorator (run `ezpz init` for a template); they're discovered via the
 `ezpz.adapters` entry-point group, so they live fine in your own package.
 
+### Releasing
+
+Releases publish to PyPI automatically via `.github/workflows/release.yml`, using **PyPI Trusted
+Publishing** (OIDC) — no API token is stored anywhere. To cut a release: bump `version` in
+`pyproject.toml`, then tag and push:
+
+```
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The tag triggers a build (`sdist` + `wheel`, validated with `twine check`) and an upload to PyPI.
+One-time setup on PyPI before the first release: add a *pending publisher* (PyPI → Your projects →
+Publishing) for project `ezpz-evals`, owner `jonmoubayed`, repo `ezpz-evals`, workflow
+`release.yml`, environment `pypi`.
+
 ## License
 
 [MIT](LICENSE) © 2026 Jon Moubayed.
