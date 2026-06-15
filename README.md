@@ -1,5 +1,9 @@
 # ezpz evals
 
+[![CI](https://github.com/jonmoubayed/ezpz-evals/actions/workflows/ci.yml/badge.svg)](https://github.com/jonmoubayed/ezpz-evals/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 A **local-first** harness for evaluating unstructured-document pipelines (extraction today,
 retrieval/QA later) and comparing tools/models side by side on the same cohort.
 
