@@ -1,0 +1,35 @@
+# No-network M4 demo: 'accurate' nails ground truth; 'flawed' hallucinates a PO, drops a line
+# item (missed row), and gets the date + vendor wrong — so the hallucination + missed-row +
+# similarity metrics all light up in the leaderboard.
+dataset: fake_invoices_v1@1
+task: fake_invoice@1
+pipelines:
+  - adapter: fake
+    config:
+      label: accurate
+      by_slug:
+        inv-001:
+          invoice_number: "INV-001"
+          invoice_date: "2024-01-15"
+          vendor_name: "Acme Corporation"
+          total_amount: "$219.00"
+          po_number: null
+          line_items:
+            - { description: "Widget A",  quantity: 10, unit_price: "$12.00" }
+            - { description: "Setup fee", quantity: 1,  unit_price: "$99.00" }
+  - adapter: fake
+    config:
+      label: flawed
+      by_slug:
+        inv-001:
+          invoice_number: "INV-001"
+          invoice_date: "2024-02-15"          # wrong month
+          vendor_name: "ACME Inc"             # low string similarity to "Acme Corporation"
+          total_amount: "$219.00"
+          po_number: "PO-7"                   # hallucination: GT po_number is ABSENT
+          line_items:
+            - { description: "Widget A", quantity: 10, unit_price: "$12.00" }
+            # "Setup fee" row dropped -> a missed row (recall < 1)
+options:
+  concurrency: 1
+  samples_per_doc: 1

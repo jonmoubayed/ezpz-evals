@@ -1,0 +1,9 @@
+ACME CORPORATION — INVOICE
+Invoice #: INV-001
+Date: 2024-01-15
+Bill to: Globex
+Line items:
+  Widget A   x10   @ $12.00
+  Setup fee  x1    @ $99.00
+Total: $219.00
+(No purchase order referenced.)

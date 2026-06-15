@@ -1,0 +1,34 @@
+# A REAL cheap→strong cascade on a (synthetic) Q1 2025 earnings transcript, vs the two baselines.
+# Needs ANTHROPIC_API_KEY (export it or put it in ./.env) and the .[anthropic] extra.
+#
+#   ezpz run     examples/experiments/earnings_cascade.yaml
+#   ezpz analyze <run_id>     # escalation rate + confidence calibration
+#
+# The cascade runs the cheap self-rating tier first; if its min per-field confidence is below
+# `threshold`, it escalates to the strong tier. Compare accuracy/cost/latency vs the baselines.
+#
+# `self_rate: true` is a PROVIDER-NEUTRAL flag on any LLM adapter — it asks the model to emit a
+# per-field confidence (0..1) that the cascade gates on. Strategies and tiers are interchangeable:
+# swap `anthropic` for `gemini`/`openai`/`llamaindex`, mix providers across tiers, change models —
+# nothing else changes. e.g. a Gemini-Flash → Claude-Sonnet cascade is the same config shape:
+#
+#   tiers:
+#     - { adapter: gemini,    config: { model: gemini-2.5-flash, self_rate: true, api_key_env: GEMINI_API_KEY } }
+#     - { adapter: anthropic, config: { model: claude-sonnet-4-6,                  api_key_env: ANTHROPIC_API_KEY } }
+#
+# The self-rated confidence is the model's OWN heuristic — calibrate it with `ezpz analyze`
+# before trusting the gate.
+dataset: earnings_v1@1
+task: earnings_extraction@1
+pipelines:
+  - { adapter: anthropic, config: { label: haiku-only,  model: claude-haiku-4-5,  api_key_env: ANTHROPIC_API_KEY } }
+  - { adapter: anthropic, config: { label: sonnet-only, model: claude-sonnet-4-6, api_key_env: ANTHROPIC_API_KEY } }
+  - adapter: cascade
+    config:
+      label: haiku->sonnet
+      threshold: 0.8
+      tiers:
+        - { adapter: anthropic, config: { model: claude-haiku-4-5,  self_rate: true, api_key_env: ANTHROPIC_API_KEY } }
+        - { adapter: anthropic, config: { model: claude-sonnet-4-6,                   api_key_env: ANTHROPIC_API_KEY } }
+options:
+  budget_usd: 2

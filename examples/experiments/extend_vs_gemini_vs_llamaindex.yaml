@@ -1,0 +1,37 @@
+# The centerpiece: one declarative file, three tools, identical task + scorers.
+# `ezpz run examples/experiments/extend_vs_gemini_vs_llamaindex.yaml`
+dataset: invoices_v1@1
+task: invoice_extraction@1
+
+pipelines:
+  - adapter: extend
+    config:
+      api_key_env: EXTEND_API_KEY
+
+  - adapter: gemini
+    config:
+      model: gemini-2.5-pro          # verify current model id
+      api_key_env: GEMINI_API_KEY
+      schema_mode: json              # force structured output
+      prompt_template: default       # prompt is part of config -> versioned; A/B as separate pipelines
+      temperature: 0
+
+  - adapter: gemini                  # a second Gemini config = a separate, comparable pipeline
+    config:
+      model: gemini-2.5-flash
+      api_key_env: GEMINI_API_KEY
+      schema_mode: json
+      prompt_template: default
+      temperature: 0
+
+  - adapter: llamaindex
+    config:
+      parser: llamaparse             # parse quality is part of what you're evaluating
+      backend_model: gpt-4o-mini     # verify
+      api_key_env: LLAMA_CLOUD_API_KEY
+
+# Operational metrics (latency, cost, error rate) are always collected; no GT needed.
+options:
+  concurrency: 4
+  budget_usd: 5
+  samples_per_doc: 1

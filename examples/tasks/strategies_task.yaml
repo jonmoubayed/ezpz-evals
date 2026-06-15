@@ -1,0 +1,8 @@
+name: strategies_task
+version: "1"
+type: extraction
+scorers:
+  - name: exact
+fields:
+  - { name: invoice_number, type: string,   required: true, scorers: [{ name: exact }] }
+  - { name: total_amount,   type: currency, required: true, scorers: [{ name: numeric_tolerance, config: { abs: 0.01 } }] }

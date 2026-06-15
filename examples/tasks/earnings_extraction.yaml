@@ -1,0 +1,31 @@
+name: earnings_extraction
+version: "1"
+type: extraction
+instructions: >
+  Extract the issuing company, the fiscal quarter, and total firm revenue (in MILLIONS of USD)
+  from this earnings document. If a value is not present, return null rather than guessing.
+
+scorers:
+  - name: exact
+
+fields:
+  - name: company_name
+    type: string
+    required: true
+    description: The company that issued the earnings report (e.g. "Northwind Financial Group, Inc.").
+    scorers: [{ name: string_similarity, config: { threshold: 0.7 } }]
+
+  - name: quarter
+    type: string
+    required: true
+    description: Fiscal reporting period, formatted exactly as "Q<n> <year>" — e.g. "Q1 2025".
+    scorers: [{ name: exact }]
+
+  - name: revenue_millions
+    type: number
+    required: true
+    description: >
+      Total firm revenues for the quarter, expressed in MILLIONS of USD. Convert from billions
+      if the document reports them that way (e.g. "$21.6 billion of revenues" -> 21600). Use the
+      total/firmwide figure, not a single segment.
+    scorers: [{ name: numeric_tolerance, config: { abs: 50, rel: 0.01 } }]

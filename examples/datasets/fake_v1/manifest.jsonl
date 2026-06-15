@@ -1,0 +1,2 @@
+{"slug": "fake-001", "path": "docs/fake-001.txt", "mime": "text/plain", "doc_type": "invoice", "tags": ["clean", "single-page"], "ground_truth_path": "ground_truth/fake-001.json"}
+{"slug": "fake-002", "path": "docs/fake-002.txt", "mime": "text/plain", "doc_type": "invoice", "tags": ["scanned", "single-page"], "ground_truth_path": "ground_truth/fake-002.json"}

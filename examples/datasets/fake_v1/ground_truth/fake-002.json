@@ -1,0 +1,9 @@
+{
+  "doc_id": "content-hash-resolved-at-load-time",
+  "fields": {
+    "invoice_number": "INV-002",
+    "total_amount": { "amount": "250.50", "currency": "USD" },
+    "quantity": 7,
+    "po_number": "__ABSENT__"
+  }
+}

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Secrets / local env (referenced by NAME from configs; never commit real keys)
+.env
+.env.local
+
+# ezpz local state: sqlite db, raw-response cache, blob store
+.ezpz/
+*.sqlite
+*.sqlite-journal
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Editor / OS / agent-local
+.DS_Store
+.claude/settings.local.json

@@ -1,0 +1,2 @@
+{"slug": "acme-2024-01", "path": "docs/acme-2024-01.pdf", "mime": "application/pdf", "doc_type": "invoice", "tags": ["digital", "single-page"], "ground_truth_path": "ground_truth/acme-2024-01.json"}
+{"slug": "globex-scan-07", "path": "docs/globex-scan-07.pdf", "mime": "application/pdf", "doc_type": "invoice", "tags": ["scanned", "multi-page"], "ground_truth_path": "ground_truth/globex-scan-07.json"}

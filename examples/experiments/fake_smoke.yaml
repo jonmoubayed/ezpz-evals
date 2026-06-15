@@ -1,0 +1,20 @@
+# No-network smoke experiment for the M1 vertical slice. Two 'fake' pipelines with different
+# configs are two separate, comparable pipelines (config fully determines identity).
+dataset: fake_v1@1
+task: fake_extraction@1
+pipelines:
+  - adapter: fake
+    config:
+      label: perfect          # matches ground truth on every field
+      by_slug:
+        fake-001: { invoice_number: "INV-001", total_amount: "$100.00", quantity: 3, po_number: null }
+        fake-002: { invoice_number: "INV-002", total_amount: "$250.50", quantity: 7, po_number: null }
+  - adapter: fake
+    config:
+      label: noisy            # hallucinates a PO on doc 1; wrong invoice + total on doc 2
+      by_slug:
+        fake-001: { invoice_number: "INV-001", total_amount: "$100.00", quantity: 3, po_number: "PO-9" }
+        fake-002: { invoice_number: "INV-XXX", total_amount: "$999.00", quantity: 7, po_number: null }
+options:
+  concurrency: 1
+  samples_per_doc: 1

@@ -1,0 +1,33 @@
+# Evaluate LOCAL models (no cloud, no keys) on a (synthetic) Q1 2025 earnings transcript, via the
+# `openai_compatible` adapter pointed at a local OpenAI-compatible server.
+#
+# Prereqs: an OpenAI-compatible server running locally. With Ollama:
+#     ollama serve & ; ollama pull llama3.1 ; ollama pull qwen2.5
+#   then:  ezpz run examples/experiments/local_ollama.yaml
+#
+# `base_url` is the only required extra. Local servers ignore the API key, so none is configured
+# (the adapter sends a placeholder). `prices: {0, 0}` records these as free; drop it to leave cost
+# unknown, or set real per-1M rates for a hosted endpoint. The adapter speaks the OpenAI schema,
+# so the same config works against vLLM (http://localhost:8000/v1), LM Studio, Together, Groq,
+# OpenRouter, DeepSeek, etc. — just change base_url, model, and (for hosted) api_key_env.
+dataset: earnings_v1@1
+task: earnings_extraction@1
+pipelines:
+  - adapter: openai_compatible
+    config:
+      label: ollama-llama3.1
+      base_url: http://localhost:11434/v1
+      model: llama3.1
+      prices: { input_per_1m: 0, output_per_1m: 0 }
+  - adapter: openai_compatible
+    config:
+      label: ollama-qwen2.5
+      base_url: http://localhost:11434/v1
+      model: qwen2.5
+      prices: { input_per_1m: 0, output_per_1m: 0 }
+  # Add a hosted tier to compare local vs cloud on the same cohort (needs the key in env/.env):
+  # - adapter: openai_compatible
+  #   config: { label: together-llama-70b, base_url: https://api.together.xyz/v1,
+  #             model: meta-llama/Llama-3.3-70B-Instruct-Turbo, api_key_env: TOGETHER_API_KEY }
+options:
+  budget_usd: 0

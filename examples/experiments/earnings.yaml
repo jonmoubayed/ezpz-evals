@@ -1,0 +1,12 @@
+# Extract company / quarter / total revenue from a (synthetic) Q1 2025 earnings-call transcript.
+# Needs ANTHROPIC_API_KEY (export it, or put it in .env — the CLI auto-loads ./.env).
+# Add gemini / openai pipelines below to compare tools on the same doc.
+dataset: earnings_v1@1
+task: earnings_extraction@1
+pipelines:
+  - adapter: anthropic
+    config:
+      model: claude-opus-4-8
+      api_key_env: ANTHROPIC_API_KEY
+options:
+  budget_usd: 1

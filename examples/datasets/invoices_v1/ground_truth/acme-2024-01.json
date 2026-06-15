@@ -1,0 +1,14 @@
+{
+  "doc_id": "REPLACE_WITH_CONTENT_HASH",
+  "fields": {
+    "invoice_number": "INV-10231",
+    "invoice_date": "2024-01-15",
+    "vendor_name": "Acme Corporation",
+    "total_amount": { "amount": "1284.50", "currency": "USD" },
+    "po_number": "__ABSENT__",
+    "line_items": [
+      { "description": "Widget A", "quantity": 10, "unit_price": { "amount": "12.00", "currency": "USD" } },
+      { "description": "Setup fee", "quantity": 1,  "unit_price": { "amount": "99.00", "currency": "USD" } }
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+# Three-way LLM comparison on the invoice task: Claude vs Gemini vs OpenAI.
+#
+# Each pipeline's config FULLY determines its identity (model, prompt, temperature, prices...).
+# Secrets are referenced by env-var NAME (read from the environment / .env), never inlined.
+#
+# NOTE: running this needs (a) the matching extra installed (.[anthropic] / .[gemini] / .[openai]),
+# (b) the API keys set, (c) the M4 scorers the invoice task uses (date_match, string_similarity,
+# list_table, presence), and (d) real invoice PDFs in the dataset. VERIFY model ids + pricing
+# against current vendor docs before pinning (PLAN §13).
+dataset: invoices_v1@1
+task: invoice_extraction@1
+pipelines:
+  - adapter: anthropic
+    config:
+      model: claude-opus-4-8        # Opus 4.x rejects `temperature`; the adapter omits it for these
+      api_key_env: ANTHROPIC_API_KEY
+      # prices are built in for current Claude models (input/output USD per 1M tokens)
+
+  - adapter: gemini
+    config:
+      model: gemini-2.5-flash
+      api_key_env: GEMINI_API_KEY
+      temperature: 0
+      prices: { input_per_1m: 0.30, output_per_1m: 2.50 }   # VERIFY (PLAN §13)
+
+  - adapter: openai
+    config:
+      model: gpt-4o-mini
+      api_key_env: OPENAI_API_KEY
+      temperature: 0
+      prices: { input_per_1m: 0.15, output_per_1m: 0.60 }    # VERIFY (PLAN §13)
+options:
+  concurrency: 2
+  budget_usd: 5
+  samples_per_doc: 1

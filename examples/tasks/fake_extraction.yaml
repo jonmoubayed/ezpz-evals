@@ -1,0 +1,30 @@
+name: fake_extraction
+version: "1"
+type: extraction
+instructions: >
+  Minimal task for the M1 no-network vertical slice. Uses only the scorers implemented in M1
+  (exact, numeric_tolerance) and exercises the ABSENT ground-truth state via po_number.
+
+scorers:
+  - name: exact
+
+fields:
+  - name: invoice_number
+    type: string
+    required: true
+    scorers: [{ name: exact }]
+
+  - name: total_amount
+    type: currency
+    required: true
+    scorers: [{ name: numeric_tolerance, config: { abs: 0.01 } }]
+
+  - name: quantity
+    type: integer
+    required: true
+    scorers: [{ name: numeric_tolerance, config: { abs: 0 } }]
+
+  - name: po_number
+    type: string
+    required: false   # genuinely ABSENT in ground truth -> a correct null scores correct
+    scorers: [{ name: exact }]

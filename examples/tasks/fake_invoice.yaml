@@ -1,0 +1,29 @@
+name: fake_invoice
+version: "1"
+type: extraction
+instructions: >
+  Richer no-network task for the M4 scoring slice. Exercises every M4 scorer: date_match,
+  string_similarity, presence (ABSENT po_number), and list_table (line_items), alongside
+  exact + numeric_tolerance.
+
+scorers:
+  - name: exact
+
+fields:
+  - { name: invoice_number, type: string,   required: true,  scorers: [{ name: exact }] }
+  - { name: invoice_date,   type: date,     required: true,  scorers: [{ name: date_match, config: { tolerance_days: 0 } }] }
+  - { name: vendor_name,    type: string,   required: true,  scorers: [{ name: string_similarity, config: { threshold: 0.9 } }] }
+  - { name: total_amount,   type: currency, required: true,  scorers: [{ name: numeric_tolerance, config: { abs: 0.01 } }] }
+  - { name: po_number,      type: string,   required: false, scorers: [{ name: presence }, { name: exact }] }
+  - name: line_items
+    type: list
+    required: true
+    match_key: description
+    item:
+      name: line_item
+      type: object
+      fields:
+        - { name: description, type: string,   scorers: [{ name: string_similarity, config: { threshold: 0.85 } }] }
+        - { name: quantity,    type: number,   scorers: [{ name: numeric_tolerance, config: { abs: 0 } }] }
+        - { name: unit_price,  type: currency, scorers: [{ name: numeric_tolerance, config: { abs: 0.01 } }] }
+    scorers: [{ name: list_table }]

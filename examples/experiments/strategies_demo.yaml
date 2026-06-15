@@ -1,0 +1,58 @@
+# Major extraction METHODOLOGIES compared on one cohort — runnable with NO API keys (every tier is
+# the deterministic `fake` adapter, so confidence + cost are simulated). Swap the inner `fake` tiers
+# for real adapters (anthropic/gemini/openai/...) to run it for real.
+#
+#   ezpz run     examples/experiments/strategies_demo.yaml
+#   ezpz analyze <run_id>        # calibration + escalation rate
+#
+# What you should see: cascade lands between cheap and expensive on accuracy at ~cheap cost;
+# ensemble (vote-of-3) fixes some errors but inherits correlated ones; verify reaches expensive
+# accuracy at the highest cost. `fake` tiers carry a simulated `_confidence` to drive the cascade.
+
+# --- reusable fake tiers (anchors; the `_tiers` key itself is ignored by the loader) ---
+_tiers:
+  cheap: &cheap
+    adapter: fake
+    config:
+      label: cheap
+      cost_usd: 0.001
+      by_slug:
+        doc-a: { invoice_number: "INV-A",     total_amount: "$100.00", _confidence: 0.95 }   # right + confident
+        doc-b: { invoice_number: "INV-X",     total_amount: "$200.00", _confidence: 0.40 }   # unsure -> escalate
+        doc-c: { invoice_number: "INV-WRONG", total_amount: "$999.00", _confidence: 0.90 }   # WRONG + overconfident
+  expensive: &expensive
+    adapter: fake
+    config:
+      label: expensive
+      cost_usd: 0.010
+      by_slug:
+        doc-a: { invoice_number: "INV-A", total_amount: "$100.00", _confidence: 0.99 }
+        doc-b: { invoice_number: "INV-B", total_amount: "$200.00", _confidence: 0.99 }
+        doc-c: { invoice_number: "INV-C", total_amount: "$300.00", _confidence: 0.99 }
+  mid: &mid
+    adapter: fake
+    config:
+      label: mid
+      cost_usd: 0.005
+      by_slug:
+        doc-a: { invoice_number: "INV-A",     total_amount: "$100.00" }
+        doc-b: { invoice_number: "INV-B",     total_amount: "$200.00" }
+        doc-c: { invoice_number: "INV-WRONG", total_amount: "$300.00" }
+
+dataset: strategies_v1@1
+task: strategies_task@1
+pipelines:
+  # end-to-end baselines
+  - *cheap
+  - *expensive
+  # cascade / model routing: cheap first, escalate to expensive when confidence < threshold
+  - adapter: cascade
+    config: { label: cascade-0.7, threshold: 0.7, tiers: [ *cheap, *expensive ] }
+  # self-consistency: majority-vote across 3 members; confidence = agreement
+  - adapter: ensemble
+    config: { label: ensemble-3, members: [ *cheap, *mid, *expensive ] }
+  # extract-then-verify: cheap extracts, expensive verifies + corrects disagreements
+  - adapter: verify
+    config: { label: extract-then-verify, extractor: *cheap, verifier: *expensive }
+options:
+  concurrency: 1

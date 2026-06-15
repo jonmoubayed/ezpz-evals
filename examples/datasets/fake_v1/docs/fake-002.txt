@@ -1,0 +1,5 @@
+GLOBEX SUPPLIES — INVOICE
+Invoice #: INV-002
+Quantity: 7
+Total: $250.50
+(No purchase order referenced.)
