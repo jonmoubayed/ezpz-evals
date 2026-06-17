@@ -40,9 +40,12 @@ Issues = "https://github.com/jonmoubayed/ezpz-evals/issues"
 gemini = ["google-genai"]                 # Google GenAI SDK
 anthropic = ["anthropic>=0.40"]           # Anthropic Claude SDK
 openai = ["openai>=1.40"]                 # OpenAI SDK
-extend = ["httpx>=0.27"]                  # REST adapter; swap for official SDK if available
+extend = ["httpx>=0.27"]                  # REST adapter + document source; swap for official SDK if available
 llamaindex = ["llama-index>=0.11", "llama-index-llms-openai", "llama-parse"]
 embeddings = ["numpy"]                     # for embedding-similarity scorer
+# Document sources (where cohorts come from) — optional, like adapter SDKs.
+s3 = ["boto3>=1.34"]                       # S3 / S3-compatible document source
+langfuse = ["langfuse>=4"]                 # Langfuse-dataset document source
 ui = ["streamlit>=1.36", "pandas>=2"]
 dev = ["pytest>=8", "ruff", "mypy", "types-PyYAML"]
 
@@ -56,6 +59,6 @@ packages = ["src/ezpz"]
 # Optional adapter SDKs + the UI extra aren't installed in the base/dev env.
 module = [
     "google.*", "anthropic.*", "openai.*", "httpx", "llama_index.*", "llama_parse",
-    "streamlit.*", "pandas.*",
+    "streamlit.*", "pandas.*", "boto3", "boto3.*", "langfuse", "langfuse.*",
 ]
 ignore_missing_imports = true

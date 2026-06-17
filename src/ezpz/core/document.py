@@ -39,6 +39,31 @@ class Document(BaseModel):
     notes: Optional[str] = None
 
 
+class DatasetSpec(BaseModel):
+    """Where a dataset's documents come from. A bare ``"name@version"`` string in an experiment
+    means the default ``local`` source; the mapping form selects another document source
+    (``s3``, ``langfuse``, ``extend``, ...) and carries its connection ``config``."""
+    source: str = "local"            # registered document-source name
+    name: str                        # dataset name
+    version: str = ""                # dataset version ("" = unversioned)
+    config: dict[str, Any] = Field(default_factory=dict)  # source-specific (bucket, dataset id, ...)
+
+    @property
+    def ref(self) -> str:
+        """The canonical ``name@version`` string recorded on the immutable Run."""
+        return f"{self.name}@{self.version}" if self.version else self.name
+
+    @classmethod
+    def coerce(cls, value: Any) -> "DatasetSpec":
+        """Accept either ``"name@version"`` (-> local source) or a full mapping."""
+        if isinstance(value, DatasetSpec):
+            return value
+        if isinstance(value, str):
+            name, _, version = value.partition("@")
+            return cls(source="local", name=name, version=version)
+        return cls.model_validate(value)
+
+
 class Dataset(BaseModel):
     name: str
     version: str                     # immutable once published; changes -> new version

@@ -26,7 +26,8 @@ def test_experiment_load_yaml_parses_example_experiment():
     exp = ExperimentConfig.load_yaml(
         str(REPO / "examples" / "experiments" / "extend_vs_gemini_vs_llamaindex.yaml")
     )
-    assert exp.dataset == "invoices_v1@1"
+    assert exp.dataset.ref == "invoices_v1@1"
+    assert exp.dataset.source == "local"  # bare string defaults to the local source
     assert exp.task == "invoice_extraction@1"
     assert len(exp.pipelines) == 4
     assert exp.options.budget_usd == 5

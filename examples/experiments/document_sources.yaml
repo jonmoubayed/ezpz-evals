@@ -1,0 +1,52 @@
+# Where a cohort's documents come from is pluggable: the `dataset:` field selects a document
+# SOURCE. A bare "name@version" string (as in the other examples) means the default `local`
+# source. The mapping form below selects another source and carries its connection `config`.
+# A source only changes where bytes originate — identity (content hash), scoring, caching, and
+# storage are all source-agnostic.
+#
+# This file documents the four built-in sources; uncomment exactly one `dataset:` block to use it.
+# (Remote sources need their optional extra installed, e.g. `pip install -e ".[s3]"`.)
+
+# --- local (default): a manifest + files on disk -------------------------------------------
+dataset: invoices_v1@1
+# equivalently:
+# dataset: { source: local, name: invoices_v1, version: "1" }
+
+# --- s3: a manifest.jsonl + referenced docs/GT in a bucket ---------------------------------
+# dataset:
+#   source: s3
+#   name: invoices_v1
+#   version: "1"
+#   config:
+#     bucket: my-eval-bucket
+#     prefix: cohorts/invoices_v1/      # optional key prefix
+#     manifest_key: manifest.jsonl      # optional (default)
+#     region: us-east-1                 # optional
+#     endpoint_url: ...                 # optional, for MinIO / S3-compatible stores
+#   # credentials via the standard AWS chain (env vars / shared config / instance role)
+
+# --- langfuse: each dataset item -> one document (expected_output -> ground truth) ----------
+# dataset:
+#   source: langfuse
+#   name: invoices_v1
+#   version: "1"
+#   config:
+#     dataset: my-langfuse-dataset      # optional (defaults to `name`)
+#   # auth via LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST
+
+# --- extend: raw files pulled from Extend's file storage (unlabeled) ------------------------
+# dataset:
+#   source: extend
+#   name: invoices_v1
+#   version: "1"
+#   config:
+#     api_key_env: EXTEND_API_KEY       # optional (default)
+#     limit: 100                        # optional
+
+task: invoice_extraction@1
+pipelines:
+  - adapter: gemini
+    config: { model: gemini-2.5-flash, api_key_env: GEMINI_API_KEY, schema_mode: json, temperature: 0 }
+options:
+  concurrency: 4
+  budget_usd: 5

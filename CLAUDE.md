@@ -31,7 +31,8 @@ QA/RAG later) and comparing tools/models on the same cohort.
 7. **Runs are immutable + reproducible**; aggregates are derived and recomputable from raw `FieldScore`s.
 
 ## Commands
-- Install: `pip install -e ".[dev]"`  — add `.[gemini]` / `.[extend]` / `.[llamaindex]` / `.[ui]` as needed
+- Install: `pip install -e ".[dev]"`  — add adapter extras `.[gemini]` / `.[extend]` / `.[llamaindex]` and
+  document-source extras `.[s3]` / `.[langfuse]` / `.[ui]` as needed
 - Test: `pytest`  ·  Lint/format: `ruff check` / `ruff format`  ·  Types: `mypy src`
 - Validate before spending money: `ezpz validate <experiment.yaml>`
 - Run: `ezpz run examples/experiments/extend_vs_gemini_vs_llamaindex.yaml --budget-usd 5`
@@ -42,6 +43,10 @@ QA/RAG later) and comparing tools/models on the same cohort.
 - `normalize/` — central value canonicalization.
 - `adapters/` — the swappable layer: `base.Pipeline` (stages `compile`/`ingest`/`invoke`/`map` + shared `run`)
   plus one module per tool. **All provider SDK calls live here** (contains SDK churn).
+- `sources/` — the input-side swappable layer: `base.DocumentSource` + registry, one module per origin
+  (`local` default · `s3` · `langfuse` · `extend`). A source enumerates a cohort and materializes bytes to a
+  local `source_path`, so `doc_id` stays content-addressed and everything downstream is source-agnostic.
+  Remote-source SDKs are lazy optional extras (registry lists them even when uninstalled).
 - `scorers/` — pluggable metrics over (normalized prediction, GT). `list_table` and `presence` are the tricky ones.
 - `engine/` — executor (per-provider concurrency, retries, resumable), cache, cost/budget, aggregate (macro/micro, slices, CIs).
 - `store/` — SQLite (`schema.sql`) + content-addressed blob store; **tables hold blob hashes, not bytes**.

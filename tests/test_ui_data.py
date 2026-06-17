@@ -26,7 +26,7 @@ def _populated(tmp_path):
     task = resolve_task(ROOT, exp.task)
     pipelines = [get_adapter(p.adapter)(p) for p in exp.pipelines]
     for rid in ("r1", "r2"):
-        run = Run(run_id=rid, dataset_ref=exp.dataset, task_ref=exp.task,
+        run = Run(run_id=rid, dataset_ref=exp.dataset.ref, task_ref=exp.task,
                   pipelines=exp.pipelines, scorers=exp.scorers, options=exp.options,
                   status=RunStatus.RUNNING)
         Executor(store, cache).run(run, dataset, task, pipelines, exp.scorers)

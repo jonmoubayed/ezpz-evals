@@ -23,7 +23,7 @@ def _run(tmp_path):
     dataset = resolve_dataset(ROOT, exp.dataset)
     task = resolve_task(ROOT, exp.task)
     pipelines = [get_adapter(p.adapter)(p) for p in exp.pipelines]
-    run = Run(run_id="r1", dataset_ref=exp.dataset, task_ref=exp.task,
+    run = Run(run_id="r1", dataset_ref=exp.dataset.ref, task_ref=exp.task,
               pipelines=exp.pipelines, scorers=exp.scorers, options=exp.options,
               status=RunStatus.RUNNING)
     Executor(store, cache).run(run, dataset, task, pipelines, exp.scorers)

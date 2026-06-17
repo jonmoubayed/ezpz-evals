@@ -29,6 +29,7 @@ from ezpz.engine.cost import estimate_cost
 from ezpz.engine.executor import Executor, normalize_mapped, score_fields
 from ezpz.plugins import import_modules, load_plugins
 from ezpz.scorers import registry as scorer_registry
+from ezpz.sources import registry as source_registry  # noqa: F401  (import = register built-in sources)
 from ezpz.store.blobs import BlobStore
 from ezpz.store.sqlite import SqliteStore
 
@@ -134,11 +135,16 @@ def validate(experiment: str):
     except Exception as e:
         errors.append(f"plugin module import failed: {e}")
 
+    if exp.dataset.source not in source_registry.available():
+        errors.append(
+            f"unknown document source '{exp.dataset.source}' (have: {source_registry.available()})"
+        )
+
     dataset = task = None
     try:
         dataset = resolve_dataset(root, exp.dataset)
     except Exception as e:
-        errors.append(f"dataset '{exp.dataset}' did not resolve: {e}")
+        errors.append(f"dataset '{exp.dataset.ref}' (source: {exp.dataset.source}) did not resolve: {e}")
     try:
         task = resolve_task(root, exp.task)
     except Exception as e:
@@ -213,7 +219,7 @@ def run(
     store, cache = _store_and_cache()
     pipelines = [get_adapter(pc.adapter)(pc) for pc in exp.pipelines]
     run_obj = Run(
-        run_id=uuid.uuid4().hex[:12], dataset_ref=exp.dataset, task_ref=exp.task,
+        run_id=uuid.uuid4().hex[:12], dataset_ref=exp.dataset.ref, task_ref=exp.task,
         pipelines=exp.pipelines, scorers=exp.scorers, options=options,
         env={"python": platform.python_version()}, status=RunStatus.RUNNING, started_at=_now(),
     )

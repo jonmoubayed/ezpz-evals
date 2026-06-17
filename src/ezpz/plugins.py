@@ -21,7 +21,7 @@ import os
 import sys
 from importlib.metadata import entry_points
 
-_GROUPS = ("ezpz.adapters", "ezpz.scorers")
+_GROUPS = ("ezpz.adapters", "ezpz.scorers", "ezpz.sources")
 _loaded = False
 
 

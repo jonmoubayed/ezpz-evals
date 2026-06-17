@@ -195,7 +195,7 @@ def test_concurrent_results_match_serial(tmp_path):
     def summarize(concurrency, sub):
         store, cache = _harness(tmp_path / sub)
         pipelines = [get_adapter(p.adapter)(p) for p in exp.pipelines]
-        run = Run(run_id="r1", dataset_ref=exp.dataset, task_ref=exp.task, pipelines=exp.pipelines,
+        run = Run(run_id="r1", dataset_ref=exp.dataset.ref, task_ref=exp.task, pipelines=exp.pipelines,
                   scorers=exp.scorers, status=RunStatus.RUNNING,
                   options=exp.options.model_copy(update={"concurrency": concurrency}))
         Executor(store, cache).run(run, dataset, task, pipelines, exp.scorers)

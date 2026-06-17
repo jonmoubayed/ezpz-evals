@@ -31,7 +31,7 @@ def _harness(tmp_path):
 
 def _make_run(run_id, exp):
     return Run(
-        run_id=run_id, dataset_ref=exp.dataset, task_ref=exp.task,
+        run_id=run_id, dataset_ref=exp.dataset.ref, task_ref=exp.task,
         pipelines=exp.pipelines, scorers=exp.scorers, options=exp.options,
         status=RunStatus.RUNNING,
     )
