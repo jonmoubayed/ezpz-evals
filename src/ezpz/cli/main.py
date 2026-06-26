@@ -350,19 +350,20 @@ def analyze(run_id: str):
 
 
 @app.command()
-def view(db: str = typer.Option(".ezpz/ezpz.sqlite", help="SQLite DB to view")):
-    """Launch the local viewer (Streamlit; reads SQLite, never re-runs)."""
-    import importlib.util
-    import subprocess
-    import sys
+def view(
+    db: str = typer.Option(".ezpz/ezpz.sqlite", help="SQLite DB to view"),
+    port: int = typer.Option(8501, help="port for the local viewer server"),
+    host: str = typer.Option("127.0.0.1", help="bind address"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="don't auto-open a browser"),
+):
+    """Launch the local viewer — a stdlib web server (no extra deps) that reads SQLite and never
+    re-runs. Serves the SPA + a read-only JSON API; the budget modal only estimates."""
+    from ezpz.ui.server import serve
 
-    if importlib.util.find_spec("streamlit") is None:
-        rprint('[red]Streamlit not installed.[/red] Install the viewer extra: '
-               '[bold]pip install -e ".\\[ui]"[/bold]')
-        raise typer.Exit(code=1)
-    app_path = Path(__file__).resolve().parent.parent / "ui" / "app.py"
-    env = {**os.environ, "EZPZ_DB": str(Path(db).resolve())}
-    subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path)], env=env)
+    db_path = str(Path(db).resolve())
+    if not Path(db_path).exists():
+        rprint(f"[yellow]no DB at {db_path}[/yellow] — run [bold]ezpz run <experiment>[/bold] first.")
+    serve(db_path, host=host, port=port, open_browser=not no_browser)
 
 
 _SCAFFOLD: dict[str, str] = {

@@ -89,3 +89,70 @@ def test_failures_lists_and_filters_by_case(tmp_path):
     assert all_fail and all(not_passed for not_passed in [True])  # only failures returned
     halluc = D.failures(store, "r1", case_filter="hallucination")
     assert halluc and any(f["scorer"] == "presence" for f in halluc)
+
+
+# ---- new SPA view-models ----
+
+def test_run_menu_newest_first_with_metrics(tmp_path):
+    store, _ = _populated(tmp_path)
+    menu = D.run_menu(store)
+    assert [r["id"] for r in menu] == ["r2", "r1"]  # newest first
+    r = menu[0]
+    assert 0.0 <= r["acc"] <= 1.0 and r["n"] == 1 and "pipelines" in r["note"]
+
+
+def test_leaderboard_board_sorts_and_carries_domain_slices(tmp_path):
+    store, _ = _populated(tmp_path)
+    lb = D.leaderboard_board(store, "r1")
+    accs = [b["accuracy"] for b in lb["board"]]
+    assert accs == sorted(accs, reverse=True)        # ranked best-first
+    assert lb["domain"]["lo0"] <= lb["domain"]["hi0"]
+    assert any(s["id"] == "all" for s in lb["slices"])
+    assert lb["board"][0]["accuracy"] == 1.0          # 'accurate' pipeline leads
+    assert "cfg" in lb["board"][0] and "strategy" in lb["board"][0]
+
+
+def test_documents_carry_per_doc_accuracy(tmp_path):
+    store, _ = _populated(tmp_path)
+    docs = D.documents_in_run(store, "r1")
+    assert docs and 0.0 <= docs[0]["accuracy"] <= 1.0
+
+
+def test_drilldown_adds_confidence_provenance_and_doc_accuracy(tmp_path):
+    store, exp = _populated(tmp_path)
+    doc_id = D.documents_in_run(store, "r1")[0]["doc_id"]
+    view = D.drilldown(store, "r1", doc_id)
+    accurate = exp.pipelines[0].config_hash
+    cell = view["fields"][0]["cells"][accurate]
+    assert "confidence" in cell and "provenance" in cell    # fake adapter emits confidence
+    assert cell["confidence"] is not None
+    assert "accuracy" in view["doc"] and "failing fields" in view["doc"]["summary"]
+    assert any(p["cap"] for p in view["pipelines"])         # capability tag inferred
+
+
+def test_failure_rows_normalize_case_and_join_expected(tmp_path):
+    store, _ = _populated(tmp_path)
+    fr = D.failure_rows(store, "r1")
+    assert fr["total"] == len(fr["rows"]) and fr["rows"]
+    cases = {r["case"] for r in fr["rows"]}
+    assert cases <= {"wrong", "missing", "hallucinated", "parse_error", "absent_ok"}
+    assert "hallucinated" in cases                           # 'flawed' hallucinates po_number
+    row = fr["rows"][0]
+    assert "predicted" in row and "expected" in row and "pipe" in row
+
+
+def test_analyze_buckets_and_pairs(tmp_path):
+    store, _ = _populated(tmp_path)
+    a = D.analyze(store, "r1")
+    assert a["nConf"] > 0 and a["calBins"]                   # confidence present -> bins
+    assert all(set(b) >= {"lo", "hi", "accuracy", "n"} for b in a["calBins"])
+    assert a["paired"]                                       # 2 pipelines -> one pairing
+    assert isinstance(a["strategy"], list)
+
+
+def test_estimate_scales_observed_cost_and_flags_cap(tmp_path):
+    store, _ = _populated(tmp_path)
+    est = D.estimate(store, "r1", sample=100, cap=0.0)
+    assert {r["name"] for r in est["rows"]}                  # one row per pipeline
+    assert est["total"] >= 0.0 and "command" in est
+    assert est["over"] == (est["total"] > 0.0)

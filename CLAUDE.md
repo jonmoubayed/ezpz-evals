@@ -46,7 +46,9 @@ QA/RAG later) and comparing tools/models on the same cohort.
 - `engine/` — executor (per-provider concurrency, retries, resumable), cache, cost/budget, aggregate (macro/micro, slices, CIs).
 - `store/` — SQLite (`schema.sql`) + content-addressed blob store; **tables hold blob hashes, not bytes**.
 - `config/` — `ExperimentConfig` + YAML loader (the backbone; version experiment files).
-- `cli/` — init/validate/run/score/compare/view.  ·  `ui/` — Streamlit viewer (**reads SQLite only**).
+- `cli/` — init/validate/run/score/compare/view.  ·  `ui/` — local viewer: `server.py` (stdlib HTTP,
+  no deps) serves `static/index.html` (the SPA) over `data.py` view-models. **Reads SQLite only**;
+  the budget modal is **estimate-only** (never launches a run).
 
 ## Conventions
 - Errors classified `transport|parse|refusal|timeout|unknown`; a failed extraction is `status=error`,
