@@ -101,7 +101,17 @@ def pipeline_summary(
         d["errors"] = sum(1 for r in rs if r.status is ResultStatus.ERROR)
         d["cost_usd"] = sum(costs) if costs else 0.0
         d["latency_ms"] = sum(lats) / len(lats) if lats else 0.0
+        d["latency_p50"] = percentile(lats, 50) if lats else 0.0
     return summary
+
+
+def percentile(values: list[float], p: float) -> float:
+    """Nearest-rank percentile (p in 0..100). Stable for the small per-run sample sizes here."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    k = max(0, min(len(ordered) - 1, int(round((p / 100.0) * (len(ordered) - 1)))))
+    return ordered[k]
 
 
 def paired_compare(
@@ -148,6 +158,36 @@ def calibration(scores, results, automation_rate: float = 0.5) -> dict:
         "automation_rate": automation_rate,
         "accuracy_at_auto": round(sum(p for _, p in pairs[:k]) / k, 4),
     }
+
+
+def calibration_buckets(scores, results, n_bins: int = 5) -> list[dict]:
+    """Reliability diagram: bin predictions by emitted confidence, report accuracy + n per bin.
+
+    Joins each field-score's pass/fail with that field's confidence (same join as `calibration`),
+    then buckets into `n_bins` equal-width bins over [0, 1]. Only non-empty bins are returned, each
+    as {lo, hi, accuracy, n}. A well-calibrated model has accuracy ≈ bin midpoint."""
+    conf = {
+        (r.doc_id, r.pipeline_id, name): fv.confidence
+        for r in results for name, fv in r.fields.items()
+    }
+    bins: list[list[float]] = [[] for _ in range(n_bins)]
+    for s in scores:
+        c = conf.get((s.doc_id, s.pipeline_id, s.field))
+        if c is None:
+            continue
+        idx = min(n_bins - 1, max(0, int(c * n_bins)))
+        bins[idx].append(1.0 if s.passed else 0.0)
+    out = []
+    for i, group in enumerate(bins):
+        if not group:
+            continue
+        out.append({
+            "lo": round(i / n_bins, 4),
+            "hi": round((i + 1) / n_bins, 4),
+            "accuracy": round(sum(group) / len(group), 4),
+            "n": len(group),
+        })
+    return out
 
 
 def extras_rate(results, key: str) -> "float | None":

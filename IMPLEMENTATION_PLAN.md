@@ -122,7 +122,8 @@ service, no auth, no multi-tenant concerns in v1.
 (config), `sqlalchemy` or stdlib `sqlite3` (storage).
 
 **Optional, per-tool extras (opt-in — integrations are not bundled):**
-`gemini`, `extend`, `llamaindex`, `embeddings`, `ui` (streamlit + pandas), `dev` (pytest/ruff/mypy).
+`gemini`, `extend`, `llamaindex`, `embeddings`, `dev` (pytest/ruff/mypy). The viewer (`ezpz view`)
+is **stdlib-only** and needs no extra; `ui` is kept as an empty extra for back-compat.
 
 **Layout** (src-layout; see [Appendix E](#appendix-e-repository-tree) for the full tree):
 
@@ -136,7 +137,8 @@ src/ezpz/
   store/      # sqlite + schema.sql + content-addressed blob store + migrations
   config/     # ExperimentConfig + YAML loader (the backbone)
   cli/        # init / validate / run / score / compare / view
-  ui/         # local viewer (leaderboard / per-doc drill-down / run diff)
+  ui/         # local web viewer: server.py (stdlib HTTP) + static/index.html (SPA) over data.py
+              #   views: leaderboard / per-doc drill-down / run diff / failures / analyze
 examples/     # invoice_extraction task, a 3-tool experiment, a sample dataset + GT
 tests/        # contract + normalization + engine tests
 ```
@@ -454,17 +456,26 @@ Each spec follows the same template: **Responsibility / Interface / Key decision
 - **Done when:** All verbs work against the example experiment; `validate` catches a bad schema,
   missing GT, or absent secret before any API call.
 
-### 6.15 `ui/app.py` — local viewer (Streamlit to start)
+### 6.15 `ui/` — local web viewer (stdlib server + static SPA)
 
-- **Responsibility:** Read SQLite (never re-run) and present three views: **leaderboard**
-  (pipelines×metrics, slice toggles, CI indicators), **per-document drill-down** (columns per
-  pipeline of predicted vs GT, color-coded correct/wrong/missing/hallucinated, confidence where
-  available, rendered source page alongside), and **run diff** (which fields/docs improved or
-  regressed). Plus a failure explorer.
-- **Key decisions:** Streamlit/Gradio for speed; graduate to FastAPI + a small frontend only if
-  the side-by-side UX justifies it. Because the UI only reads SQLite, the framework can be swapped
-  without touching the engine.
-- **Done when:** A completed run is explorable: leaderboard, drill into a doc, diff two runs.
+- **Responsibility:** Read SQLite (never re-run) and present five views: **leaderboard**
+  (pipelines×metrics, slice toggles, CI whiskers, paired-compare verdict), **per-document
+  drill-down** (columns per pipeline of predicted vs GT, color-coded correct/wrong/missing/
+  hallucinated, confidence + provenance where available, rendered source alongside), **run diff**
+  (which fields/docs improved or regressed), a **failure explorer**, and **analyze** (confidence
+  calibration · paired comparison · strategy-flag rates). A budget modal estimates a run's cost
+  from observed $/doc (estimate-only — it never launches a run).
+- **Structure:** `ui/data.py` holds framework-free view-models (pure functions over `SqliteStore`);
+  `ui/server.py` is a stdlib `http.server` exposing a socket-free, unit-testable
+  `api_route(store, path, query)` plus static-file serving; `ui/static/index.html` is the SPA
+  (a faithful port of the `claude.ai/design` mockup) that consumes the JSON API.
+- **Key decisions:** **stdlib only — no web framework, no extra deps** (the design is hand-authored
+  HTML/CSS/JS that Streamlit could not render faithfully; the framework-free data layer made the
+  swap clean). Because the UI only reads SQLite, the presentation layer can be swapped without
+  touching the engine. The design display logic (theme palettes, colour thresholds, CI-bar math,
+  glyph/case maps) lives in the browser; the server stays thin.
+- **Done when:** A completed run is explorable: leaderboard, drill into a doc, diff two runs,
+  browse failures, and inspect calibration — `ezpz view` opens it in a browser.
 
 ---
 
@@ -575,8 +586,8 @@ proceeding. Milestones build strictly on prior ones.
 - **DoD:** a three-way comparison (Gemini × Extend × LlamaIndex) runs on the example task.
 
 ### M6 — Viewer
-- [ ] Implement `ui/app.py`: leaderboard, per-document drill-down (with rendered source page),
-      run diff, failure explorer.
+- [ ] Implement `ui/` (server.py + static/index.html + data.py): leaderboard, per-document
+      drill-down (with rendered source), run diff, failure explorer, analyze.
 - **DoD:** `ezpz view` opens; you can read the leaderboard, drill into a document side-by-side,
   and diff two runs.
 
@@ -744,7 +755,7 @@ ezpz-evals/
 │   ├── store/       sqlite.py schema.sql blobs.py migrations/
 │   ├── config/      experiment.py
 │   ├── cli/         main.py
-│   └── ui/          app.py
+│   └── ui/          server.py data.py static/index.html
 ├── examples/
 │   ├── tasks/invoice_extraction.yaml
 │   ├── experiments/extend_vs_gemini_vs_llamaindex.yaml

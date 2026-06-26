@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ezpz evals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg, #0a0b0d); color: var(--fg, #e7eaef);
+         font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+         font-size: 13px; line-height: 1.4; }
+  ::selection { background: oklch(0.66 0.16 250 / .3); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2a2e36; border-radius: 6px; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  input[type=range] { accent-color: oklch(0.66 0.16 250); }
+  button { font-family: inherit; }
+  mark { background: var(--acD); color: var(--acT); border-radius: 2px; padding: 0 1px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const App = (() => {
+  "use strict";
+
+  const state = {
+    theme: 'dark', view: 'leaderboard', runId: null, slice: 'all',
+    selectedDoc: null, selectedField: null, failCase: 'all', diffFilter: 'all', diffBase: null,
+    runMenuOpen: false, budgetOpen: false, sampleN: 50, budgetCap: 25,
+  };
+  let data = {};            // per-view fetched payloads
+  let runMeta = { runs: [] };
+
+  // ---- theme palettes (verbatim from the design) ----
+  const palettes = {
+    dark: {
+      bg: '#0a0b0d', panel: '#0e1014', panel2: '#16181e', line: '#1d2026', line2: '#15171c',
+      fg: '#e7eaef', fg2: '#99a0aa', fg3: '#5b616b', fg4: '#3a3f47',
+      ac: 'oklch(0.66 0.16 250)', acT: 'oklch(0.82 0.11 250)', acD: 'oklch(0.66 0.16 250 / .15)', acL: 'oklch(0.66 0.16 250 / .38)',
+      cor: 'oklch(0.72 0.15 150)', corD: 'oklch(0.72 0.15 150 / .13)', wr: 'oklch(0.68 0.2 25)', wrD: 'oklch(0.68 0.2 25 / .14)',
+      mi: 'oklch(0.8 0.13 80)', miD: 'oklch(0.8 0.13 80 / .13)', ha: 'oklch(0.66 0.2 330)', haD: 'oklch(0.66 0.2 330 / .14)',
+      pa: 'oklch(0.72 0.16 50)', paD: 'oklch(0.72 0.16 50 / .13)', ab: '#6b7280', nl: '#3a3f47',
+    },
+    light: {
+      bg: '#f3f1ea', panel: '#faf9f5', panel2: '#eceae2', line: '#e0ddd3', line2: '#ebe8df',
+      fg: '#1b1a16', fg2: '#5c574c', fg3: '#8a8579', fg4: '#b6b0a4',
+      ac: 'oklch(0.52 0.14 255)', acT: 'oklch(0.45 0.15 255)', acD: 'oklch(0.52 0.14 255 / .1)', acL: 'oklch(0.52 0.14 255 / .32)',
+      cor: 'oklch(0.5 0.14 150)', corD: 'oklch(0.5 0.14 150 / .12)', wr: 'oklch(0.52 0.2 27)', wrD: 'oklch(0.52 0.2 27 / .1)',
+      mi: 'oklch(0.56 0.12 70)', miD: 'oklch(0.56 0.12 70 / .13)', ha: 'oklch(0.5 0.2 330)', haD: 'oklch(0.5 0.2 330 / .1)',
+      pa: 'oklch(0.54 0.16 50)', paD: 'oklch(0.54 0.16 50 / .12)', ab: '#8a8579', nl: '#b6b0a4',
+    },
+  };
+  const v = n => `var(--${n})`;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const pct1 = x => (x * 100).toFixed(1);
+  const pct0 = x => (x * 100).toFixed(0);
+
+  const caseMap = () => ({
+    correct: { fg: v('cor'), bg: v('corD'), glyph: '✓', label: 'correct' },
+    wrong: { fg: v('wr'), bg: v('wrD'), glyph: '✗', label: 'wrong' },
+    missing: { fg: v('mi'), bg: v('miD'), glyph: '⊘', label: 'missing' },
+    absent_ok: { fg: v('cor'), bg: 'transparent', glyph: '∅', label: 'absent_ok' },
+    hallucinated: { fg: v('ha'), bg: v('haD'), glyph: '⚠', label: 'hallucinated' },
+    parse_error: { fg: v('pa'), bg: v('paD'), glyph: '⌀', label: 'parse_error' },
+    not_labeled: { fg: v('nl'), bg: 'transparent', glyph: '–', label: 'not_labeled' },
+    unscored: { fg: v('fg4'), bg: 'transparent', glyph: '·', label: 'unscored' },
+  });
+
+  function applyTheme() {
+    const T = palettes[state.theme];
+    const root = document.documentElement;
+    for (const k in T) root.style.setProperty('--' + k, T[k]);
+  }
+
+  // ---- data ----
+  async function api(path, params) {
+    const q = new URLSearchParams(params || {});
+    const r = await fetch(path + (q.toString() ? '?' + q : ''));
+    return r.json();
+  }
+  function curRun() { return runMeta.runs.find(r => r.id === state.runId) || runMeta.runs[0] || {}; }
+
+  async function loadState() {
+    const s = await api('/api/state');
+    runMeta = s;
+    if (!state.runId) state.runId = s.current;
+  }
+  async function loadView() {
+    const run = state.runId;
+    if (!run) { render(); return; }
+    if (state.view === 'leaderboard') {
+      data.leaderboard = await api('/api/leaderboard', { run, slice: state.slice });
+    } else if (state.view === 'documents') {
+      data.documents = await api('/api/documents', { run });
+      const docs = data.documents.docs || [];
+      if (!state.selectedDoc || !docs.find(d => d.doc_id === state.selectedDoc))
+        state.selectedDoc = docs.length ? docs[0].doc_id : null;
+      if (state.selectedDoc) data.doc = await api('/api/doc', { run, doc: state.selectedDoc });
+    } else if (state.view === 'diff') {
+      data.diff = await api('/api/diff', { run, base: state.diffBase || '' });
+    } else if (state.view === 'failures') {
+      data.failures = await api('/api/failures', { run });
+    } else if (state.view === 'analyze') {
+      data.analyze = await api('/api/analyze', { run });
+    }
+    // leaderboard rows power the budget modal; make sure they're available
+    if (!data.leaderboard || data.leaderboard.run !== run)
+      data.leaderboard = await api('/api/leaderboard', { run, slice: 'all' });
+    render();
+  }
+
+  // ===================== TOP BAR =====================
+  function topbar() {
+    const r = curRun();
+    const tabs = [['leaderboard', 'Leaderboard'], ['documents', 'Documents'], ['diff', 'Run diff'], ['failures', 'Failures'], ['analyze', 'Analyze']];
+    const nav = tabs.map(([id, label]) => {
+      const on = state.view === id;
+      return `<button onclick="App.go('${id}')" style="background:transparent; color:${on ? v('fg') : v('fg3')}; border:none; border-bottom:2px solid ${on ? v('ac') : 'transparent'}; padding:7px 13px 8px; font-size:12px; font-weight:500; cursor:pointer; letter-spacing:.01em;">${label}</button>`;
+    }).join('');
+
+    return `
+    <div style="position:sticky; top:0; z-index:30; background:var(--bg); border-bottom:1px solid var(--line); padding:0 22px;">
+      <div style="display:flex; align-items:center; gap:18px; height:52px; max-width:1280px; margin:0 auto;">
+        <div style="display:flex; align-items:baseline; gap:8px;">
+          <span style="font-weight:700; font-size:15px; color:var(--ac); letter-spacing:-.02em;">ezpz</span>
+          <span style="color:var(--fg3); font-size:11px;">evals</span>
+        </div>
+        <div style="width:1px; height:18px; background:var(--line);"></div>
+        <div style="position:relative;">
+          <button onclick="App.toggleRunMenu(event)" style="display:flex; align-items:center; gap:8px; background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:5px 11px; font-size:11.5px; color:var(--fg3); cursor:pointer;">
+            <span style="width:6px; height:6px; border-radius:50%; background:var(--cor); flex:none;"></span>
+            <span style="color:var(--fg2);">${esc(r.ds || '—')}</span><span style="color:var(--fg4);">·</span>
+            <span>run <span style="color:var(--fg);">${esc((r.id || '').slice(0, 7) || '—')}</span></span><span style="color:var(--fg4);">·</span>
+            <span>${r.n || 0} docs</span><span style="color:var(--fg3); font-size:8px; margin-left:1px;">▼</span>
+          </button>
+          ${state.runMenuOpen ? runMenu() : ''}
+        </div>
+        <nav style="display:flex; gap:2px; margin-left:14px;">${nav}</nav>
+        <div style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+          <button onclick="App.openBudget()" style="display:flex; align-items:center; gap:6px; background:var(--acD); color:var(--acT); border:1px solid var(--acL); border-radius:5px; padding:6px 11px; font-size:11.5px; font-weight:600; cursor:pointer;"><span style="font-size:13px; line-height:1;">▸</span> run</button>
+          <button onclick="App.toggleTheme()" title="toggle theme" style="background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:5px; width:30px; height:30px; font-size:13px; cursor:pointer;">${state.theme === 'dark' ? '☀' : '☾'}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function runMenu() {
+    const rows = (runMeta.runs || []).map(r => {
+      const sel = r.id === state.runId;
+      return `<div onclick="App.selectRun('${r.id}')" style="display:grid; grid-template-columns:1fr auto; gap:3px 10px; padding:10px 13px; border-bottom:1px solid var(--line2); cursor:pointer; background:${sel ? v('acD') : 'transparent'}; border-left:2px solid ${sel ? v('ac') : 'transparent'};">
+        <div style="display:flex; align-items:center; gap:7px; min-width:0;">
+          <span style="width:5px; height:5px; border-radius:50%; background:${sel ? v('cor') : v('fg4')}; flex:none;"></span>
+          <span style="font-size:12px; color:var(--fg); font-weight:600;">${esc(r.id.slice(0, 7))}</span>
+          <span style="font-size:10px; color:var(--fg4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(r.note)}</span>
+        </div>
+        <div style="text-align:right; font-size:12px; color:var(--cor); font-weight:600; font-variant-numeric:tabular-nums;">${pct1(r.acc)}%</div>
+        <div style="font-size:10px; color:var(--fg3);">${esc(r.ds)} · ${r.n} docs</div>
+        <div style="text-align:right; font-size:10px; color:var(--fg4); font-variant-numeric:tabular-nums;">${esc(r.ago)} · $${(r.cost || 0).toFixed(2)}</div>
+      </div>`;
+    }).join('');
+    return `
+      <div onclick="App.closeRunMenu()" style="position:fixed; inset:0; z-index:39;"></div>
+      <div style="position:absolute; top:38px; left:0; z-index:40; width:380px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 18px 50px rgba(0,0,0,.45); overflow:hidden;">
+        <div style="display:flex; justify-content:space-between; padding:9px 13px; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--fg3); border-bottom:1px solid var(--line);">
+          <span>recent runs</span><span style="color:var(--fg4);">newest first</span>
+        </div>
+        ${rows || '<div style="padding:14px; color:var(--fg3); font-size:11px;">no runs yet</div>'}
+        <div onclick="App.openBudget()" style="padding:10px 13px; font-size:11px; color:var(--acT); background:var(--acD); cursor:pointer; display:flex; align-items:center; gap:7px;"><span style="font-size:13px; line-height:1;">+</span> estimate a new run…</div>
+      </div>`;
+  }
+
+  function cliBar() {
+    const r = (state.runId || '').slice(0, 7);
+    const map = {
+      leaderboard: `view --run ${r} --tab leaderboard --slice ${state.slice}`,
+      documents: `view --run ${r} --tab documents`,
+      diff: `compare ${(state.diffBase || (data.diff && data.diff.base.id) || '').slice(0, 7)} ${r} --by field`,
+      failures: `view --run ${r} --failures --case ${state.failCase}`,
+      analyze: `analyze --run ${r} --calibration --strategy-flags`,
+    };
+    return `
+    <div style="background:var(--panel); border-bottom:1px solid var(--line);">
+      <div style="max-width:1280px; margin:0 auto; padding:9px 22px; display:flex; align-items:center; gap:10px;">
+        <span style="color:var(--fg4); font-size:11px;">$</span>
+        <code style="font-size:11.5px; color:var(--fg2);"><span style="color:var(--ac);">ezpz</span> ${esc(map[state.view] || '')}</code>
+        <span style="margin-left:auto; font-size:10.5px; color:var(--fg4);">reads SQLite · 0 API calls</span>
+      </div>
+    </div>`;
+  }
+
+  // ===================== LEADERBOARD =====================
+  function leaderboardView() {
+    const lb = data.leaderboard || {};
+    const board = (lb.board || []).slice().sort((a, b) => b.accuracy - a.accuracy);
+    const dom = lb.domain || { lo0: 0, hi0: 1 };
+    const R = (dom.hi0 - dom.lo0) || 1;
+    const minCost = Math.min(...board.filter(b => b.docs).map(b => b.cost_usd / Math.max(1, b.docs)), Infinity);
+    const halC = h => h <= 2 ? v('cor') : h <= 5 ? v('mi') : v('wr');
+    const misC = m => m <= 14 ? v('cor') : m <= 22 ? v('mi') : v('wr');
+
+    const slices = (lb.slices || [{ id: 'all', label: 'all', n: 0 }]).map(s => {
+      const on = state.slice === s.id;
+      return `<button onclick="App.setSlice('${s.id}')" style="background:${on ? v('acD') : 'transparent'}; color:${on ? v('acT') : v('fg3')}; border:1px solid ${on ? v('acL') : v('line')}; border-radius:4px; padding:5px 10px; font-size:11px; cursor:pointer;">${esc(s.label)} <span style="opacity:.6;">${s.n}</span></button>`;
+    }).join('');
+
+    const rows = board.map((b, i) => {
+      const lo = b.ci_low, hi = b.ci_high, acc = b.accuracy;
+      const ciHalf = ((hi - lo) / 2 * 100).toFixed(1);
+      const ciLeft = (lo - dom.lo0) / R * 100, ciW = (hi - lo) / R * 100, ciC = (acc - dom.lo0) / R * 100;
+      const perDoc = b.docs ? b.cost_usd / b.docs : 0;
+      const dot = i === 0 ? v('cor') : i < 3 ? v('ac') : v('fg4');
+      const barColor = i === 0 ? v('cor') : v('ac');
+      const errColor = b.errors === 0 ? v('fg3') : b.errors > 2 ? v('wr') : v('fg2');
+      const costColor = perDoc <= minCost ? v('cor') : v('fg2');
+      return `
+      <div style="display:grid; grid-template-columns:210px 1fr 56px 56px 80px 64px 60px; gap:0 12px; align-items:center; padding:13px 18px; border-bottom:1px solid var(--line2); background:${i === 0 ? v('acD') : 'transparent'};">
+        <div style="min-width:0;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="color:var(--fg4); font-size:11px; width:12px; font-variant-numeric:tabular-nums;">${i + 1}</span>
+            <span style="width:5px; height:5px; border-radius:50%; background:${dot}; flex:none;"></span>
+            <span style="color:var(--fg); font-size:12.5px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(b.pipeline)}</span>
+            ${b.strategy ? `<span style="font-size:8.5px; font-weight:600; letter-spacing:.05em; padding:1px 5px; border-radius:3px; background:var(--haD); color:var(--ha); flex:none;">STRAT</span>` : ''}
+          </div>
+          <div style="color:var(--fg4); font-size:10px; margin-left:25px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(b.cfg)}</div>
+        </div>
+        <div>
+          <div style="display:flex; align-items:baseline; gap:7px; margin-bottom:5px;">
+            <span style="color:var(--fg); font-size:14px; font-weight:600; font-variant-numeric:tabular-nums;">${pct1(acc)}<span style="color:var(--fg3); font-weight:400; font-size:11px;">%</span></span>
+            <span style="color:var(--fg3); font-size:10px; font-variant-numeric:tabular-nums;">±${ciHalf}</span>
+            <span style="color:var(--fg4); font-size:10px; font-variant-numeric:tabular-nums;">macro ${pct1(b.accuracy_macro)}</span>
+          </div>
+          <div style="position:relative; height:5px; background:var(--panel2); border-radius:3px;">
+            <div style="position:absolute; top:0; bottom:0; left:${ciLeft}%; width:${ciW}%; background:${barColor}; opacity:.3; border-radius:3px;"></div>
+            <div style="position:absolute; top:-2px; height:9px; width:2px; left:${ciC}%; background:${barColor}; border-radius:1px;"></div>
+          </div>
+        </div>
+        <div style="text-align:right; font-variant-numeric:tabular-nums; font-size:12.5px; color:${halC(b.hallucinations)};">${b.hallucinations}</div>
+        <div style="text-align:right; font-variant-numeric:tabular-nums; font-size:12.5px; color:${misC(b.missed)};">${b.missed}</div>
+        <div style="text-align:right; font-variant-numeric:tabular-nums; font-size:12px; color:${costColor};">$${perDoc.toFixed(3)}</div>
+        <div style="text-align:right; font-variant-numeric:tabular-nums; font-size:12px; color:var(--fg2);">${(b.latency_p50 / 1000).toFixed(1)}s</div>
+        <div style="text-align:right; font-variant-numeric:tabular-nums; font-size:12px; color:${errColor};">${b.errors}</div>
+      </div>`;
+    }).join('');
+
+    const p = lb.paired || {};
+    return `
+    <div>
+      <div style="display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:16px;">
+        <div>
+          <h1 style="margin:0; font-size:17px; font-weight:600; color:var(--fg);">Leaderboard</h1>
+          <p style="margin:4px 0 0; font-size:11.5px; color:var(--fg3);">${esc(lb.sliceMeta || '')} · micro-accuracy with 95% bootstrap CI</p>
+        </div>
+        <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">${slices}</div>
+      </div>
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+        <div style="display:grid; grid-template-columns:210px 1fr 56px 56px 80px 64px 60px; gap:0 12px; padding:11px 18px; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--fg3); border-bottom:1px solid var(--line);">
+          <div>pipeline</div><div>accuracy · 95% ci</div><div style="text-align:right;">hal</div><div style="text-align:right;">miss</div><div style="text-align:right;">$/doc</div><div style="text-align:right;">p50</div><div style="text-align:right;">err</div>
+        </div>
+        ${rows || emptyRow('no scored pipelines in this run')}
+        <div style="display:flex; align-items:center; gap:16px; padding:11px 18px; font-size:10px; color:var(--fg3);">
+          <span><span style="color:var(--cor);">●</span> correct</span>
+          <span><span style="color:var(--wr);">●</span> wrong</span>
+          <span><span style="color:var(--mi);">●</span> missing</span>
+          <span><span style="color:var(--ha);">●</span> hallucinated</span>
+          <span style="margin-left:auto; color:var(--fg4);">paired: ${esc(p.lead || '—')} ${esc(p.by || '')} → <span style="color:${p.significant ? v('cor') : v('mi')};">${esc(p.verdict || 'n/a')}</span></span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ===================== DOCUMENTS =====================
+  function documentsView() {
+    const docs = (data.documents && data.documents.docs) || [];
+    const accColor = a => a >= .9 ? v('cor') : a >= .82 ? v('mi') : v('wr');
+    const docList = docs.map(d => {
+      const sel = d.doc_id === state.selectedDoc;
+      const tags = (d.tags || []).map(t => `<span style="font-size:8.5px; color:var(--fg3); background:var(--panel2); border-radius:3px; padding:1px 5px;">${esc(t)}</span>`).join('');
+      return `<div onclick="App.selectDoc('${d.doc_id}')" style="padding:10px 13px; border-bottom:1px solid var(--line2); cursor:pointer; background:${sel ? v('acD') : 'transparent'}; border-left:2px solid ${sel ? v('ac') : 'transparent'};">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+          <span style="font-size:11.5px; color:${sel ? v('fg') : v('fg2')}; font-weight:${sel ? 600 : 400}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(d.slug)}</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:5px; margin-top:6px;">
+          <div style="flex:1; height:3px; background:var(--panel2); border-radius:2px; overflow:hidden;"><div style="height:100%; width:${d.accuracy * 100}%; background:${accColor(d.accuracy)};"></div></div>
+          <span style="font-size:9.5px; color:var(--fg3); font-variant-numeric:tabular-nums;">${pct0(d.accuracy)}%</span>
+        </div>
+        ${tags ? `<div style="display:flex; gap:4px; margin-top:6px; flex-wrap:wrap;">${tags}</div>` : ''}
+      </div>`;
+    }).join('');
+
+    const doc = data.doc;
+    const cm = caseMap();
+    let grid = emptyRow('select a document');
+    let headers = '';
+    let docName = '—', docSummary = '';
+    if (doc) {
+      docName = doc.doc.slug; docSummary = doc.doc.summary;
+      headers = doc.pipelines.map(h => `<div style="padding:9px 10px; border-left:1px solid var(--line2);"><div style="font-size:11px; color:var(--fg2); font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(h.label)}</div><div style="font-size:8.5px; color:var(--fg4); margin-top:1px;">${esc(h.cap)}</div></div>`).join('');
+      grid = doc.fields.map(f => {
+        const sel = state.selectedField === f.field;
+        const gtPresent = f.gt_kind === 'present';
+        const cells = doc.pipelines.map(p => {
+          const c = f.cells[p.pipeline_id] || { value: '—', status: 'unscored' };
+          const m = cm[c.status] || cm.unscored;
+          let display = c.value;
+          if (c.status === 'missing') display = 'missing';
+          else if (c.status === 'absent_ok') display = 'absent';
+          else if (c.status === 'parse_error') display = 'uncanonicalizable';
+          else if (c.status === 'not_labeled') display = 'not labeled';
+          const empty = c.value === '—' || c.status === 'missing' || c.status === 'absent_ok' || c.status === 'not_labeled';
+          const conf = c.confidence != null ? c.confidence.toFixed(2) : (c.provenance ? 'bbox' : '');
+          return `<div style="padding:9px 10px; border-left:1px solid var(--line2); background:${m.bg}; min-width:0; box-shadow:inset 2px 0 0 ${m.bg === 'transparent' ? 'transparent' : m.fg};">
+            <div style="display:flex; align-items:center; gap:5px;">
+              <span style="font-size:10px; color:${m.fg}; flex:none;">${m.glyph}</span>
+              <span style="font-size:11px; color:${empty ? v('fg4') : v('fg')}; font-style:${empty ? 'italic' : 'normal'}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(display)}</span>
+            </div>
+            <div style="font-size:8.5px; color:var(--fg4); margin-top:3px; margin-left:15px;">${esc(conf)}</div>
+          </div>`;
+        }).join('');
+        return `<div onclick="App.selectField('${esc(f.field)}')" style="display:grid; grid-template-columns:128px 108px repeat(${doc.pipelines.length}, minmax(92px,1fr)); border-bottom:1px solid var(--line2); cursor:pointer; background:${sel ? v('acD') : 'transparent'};">
+          <div style="padding:10px 12px; min-width:0;"><div style="font-size:11px; color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(f.field)}</div><div style="font-size:9px; color:var(--fg4);">${esc(f.type)}</div></div>
+          <div style="padding:10px 10px; border-left:1px solid var(--line2); font-size:11px; color:${gtPresent ? v('fg2') : v('fg4')}; font-style:${gtPresent ? 'normal' : 'italic'}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(f.gt)}</div>
+          ${cells}
+        </div>`;
+      }).join('');
+    }
+
+    return `
+    <div>
+      <div style="margin-bottom:16px;">
+        <h1 style="margin:0; font-size:17px; font-weight:600; color:var(--fg);">Per-document drill-down</h1>
+        <p style="margin:4px 0 0; font-size:11.5px; color:var(--fg3);">predicted value vs ground truth, one column per pipeline, color-coded by score case</p>
+      </div>
+      <div style="display:grid; grid-template-columns:208px 1fr 248px; gap:14px; align-items:start;">
+        <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+          <div style="padding:10px 13px; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--fg3); border-bottom:1px solid var(--line);">documents · ${docs.length}</div>
+          <div style="max-height:560px; overflow-y:auto;">${docList || emptyRow('no documents')}</div>
+        </div>
+        <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+          <div style="display:flex; align-items:baseline; justify-content:space-between; gap:14px; padding:11px 14px; border-bottom:1px solid var(--line);">
+            <span style="font-size:12.5px; color:var(--fg); font-weight:600; white-space:nowrap;">${esc(docName)}</span>
+            <span style="font-size:10.5px; color:var(--fg3); white-space:nowrap;">${esc(docSummary)}</span>
+          </div>
+          <div style="overflow-x:auto;"><div style="min-width:540px;">
+            <div style="display:grid; grid-template-columns:128px 108px repeat(${doc ? doc.pipelines.length : 1}, minmax(92px,1fr)); border-bottom:1px solid var(--line);">
+              <div style="padding:9px 12px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--fg3);">field</div>
+              <div style="padding:9px 10px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--fg3); border-left:1px solid var(--line2);">ground truth</div>
+              ${headers}
+            </div>
+            ${grid}
+          </div></div>
+        </div>
+        ${sourcePanel(doc)}
+      </div>
+      <div style="display:flex; gap:18px; margin-top:14px; padding:11px 14px; background:var(--panel); border:1px solid var(--line); border-radius:8px; font-size:10.5px; color:var(--fg3); flex-wrap:wrap;">
+        <span style="color:var(--fg4); text-transform:uppercase; letter-spacing:.05em; font-size:9.5px;">score cases:</span>
+        <span><span style="color:var(--cor);">✓</span> correct</span>
+        <span><span style="color:var(--wr);">✗</span> wrong</span>
+        <span><span style="color:var(--mi);">⊘</span> missing</span>
+        <span><span style="color:var(--cor);">∅</span> absent_ok</span>
+        <span><span style="color:var(--ha);">⚠</span> hallucinated</span>
+        <span><span style="color:var(--pa);">⌀</span> parse_error</span>
+        <span><span style="color:var(--nl);">–</span> not_labeled</span>
+      </div>
+    </div>`;
+  }
+
+  function sourcePanel(doc) {
+    let body = `<div style="color:var(--fg4); font-size:10.5px; line-height:1.6;">Click a field row to trace its source.</div>`;
+    if (doc) {
+      const text = doc.doc.source_text;
+      let prov = '';
+      if (state.selectedField) {
+        const f = doc.fields.find(x => x.field === state.selectedField);
+        const provs = f ? Object.entries(f.cells).map(([, c]) => c.provenance).filter(Boolean) : [];
+        if (provs.length) {
+          const p = provs[0];
+          prov = `<div style="margin-top:10px; font-size:10px; color:var(--fg3); line-height:1.6;"><span style="color:var(--ac);">${esc(state.selectedField)}</span> provenance — ${p.page != null ? 'page ' + p.page + ' · ' : ''}${p.bbox ? 'bbox [' + p.bbox.map(n => (+n).toFixed(0)).join(', ') + ']' : ''}${p.text_span ? '“' + esc(String(p.text_span).slice(0, 60)) + '”' : ''}</div>`;
+        } else {
+          prov = `<div style="margin-top:10px; font-size:10px; color:var(--fg4); line-height:1.6;">No provenance for <span style="color:var(--fg3);">${esc(state.selectedField)}</span> — shown for adapters that emit it.</div>`;
+        }
+      }
+      let page;
+      if (text) {
+        let shown = esc(text);
+        const f = state.selectedField && doc.fields.find(x => x.field === state.selectedField);
+        const span = f && Object.values(f.cells).map(c => c.provenance && c.provenance.text_span).find(Boolean);
+        if (span) { const e = esc(span); shown = shown.split(e).join('<mark>' + e + '</mark>'); }
+        page = `<pre style="margin:0; white-space:pre-wrap; word-break:break-word; font-size:10px; line-height:1.55; color:var(--fg2); font-family:inherit; max-height:380px; overflow:auto;">${shown}</pre>`;
+      } else {
+        page = `<div style="display:flex; flex-direction:column; gap:9px;">
+          <div style="height:11px; width:55%; background:var(--line); border-radius:2px;"></div>
+          <div style="height:7px; width:38%; background:var(--line2); border-radius:2px;"></div>
+          <div style="margin-top:10px; font-size:10px; color:var(--fg4);">source preview unavailable (non-text or missing file)</div>
+        </div>`;
+      }
+      body = `<div style="background:var(--bg); border:1px solid var(--line); border-radius:3px; padding:12px;">${page}</div>${prov}`;
+    }
+    return `
+    <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; position:sticky; top:120px;">
+      <div style="padding:10px 13px; border-bottom:1px solid var(--line); font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--fg3); display:flex; justify-content:space-between;"><span>source</span><span style="color:var(--fg4);">page 1</span></div>
+      <div style="padding:14px;">${body}</div>
+    </div>`;
+  }
+
+  // ===================== RUN DIFF =====================
+  function diffView() {
+    const d = data.diff;
+    if (!d) return emptyPanel('loading…');
+    const cm = caseMap();
+    const filters = [['all', 'all ' + (d.improved + d.regressed)], ['improved', 'improved ' + d.improved], ['regressed', 'regressed ' + d.regressed]].map(([id, label]) => {
+      const on = state.diffFilter === id;
+      return `<button onclick="App.setDiffFilter('${id}')" style="background:${on ? v('acD') : 'transparent'}; color:${on ? v('acT') : v('fg3')}; border:1px solid ${on ? v('acL') : v('line')}; border-radius:4px; padding:5px 11px; font-size:11px; cursor:pointer;">${esc(label)}</button>`;
+    }).join('');
+    const rows = d.rows.filter(r => state.diffFilter === 'all' || r.dir === state.diffFilter).slice(0, 200).map(r => {
+      const isImp = r.dir === 'improved';
+      const fromM = cm[r.from_case], toM = cm[r.to_case];
+      return `<div style="display:grid; grid-template-columns:24px 170px 150px 150px 1fr; gap:0 12px; align-items:center; padding:11px 16px; border-bottom:1px solid var(--line2);">
+        <div style="color:${isImp ? v('cor') : v('wr')}; font-size:14px;">${isImp ? '↑' : '↓'}</div>
+        <div style="font-size:11px; color:var(--fg2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(r.doc)}</div>
+        <div style="font-size:11px; color:var(--fg);">${esc(r.field)}</div>
+        <div style="font-size:11px; color:var(--fg3);">${esc(r.pipe)}</div>
+        <div style="display:flex; align-items:center; gap:8px; font-size:11px; min-width:0;">
+          <span style="color:${fromM.fg}; background:${fromM.bg}; padding:1px 6px; border-radius:3px; white-space:nowrap;">${esc(r.from_case)}</span>
+          <span style="color:var(--fg4);">→</span>
+          <span style="color:${toM.fg}; background:${toM.bg}; padding:1px 6px; border-radius:3px; white-space:nowrap;">${esc(r.to_case)}</span>
+        </div>
+      </div>`;
+    }).join('');
+    return `
+    <div>
+      <div style="margin-bottom:16px;"><h1 style="margin:0; font-size:17px; font-weight:600; color:var(--fg);">Run diff</h1><p style="margin:4px 0 0; font-size:11.5px; color:var(--fg3);">field-scores that changed between two runs of the same dataset × task</p></div>
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <div style="background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:9px 13px;"><div style="font-size:9.5px; color:var(--fg4); text-transform:uppercase; letter-spacing:.05em;">base</div><div style="font-size:12px; color:var(--fg2);">${esc(d.base.id.slice(0, 7))} <span style="color:var(--fg4);">· ${esc(d.base.note)}</span></div></div>
+        <span style="color:var(--fg4);">→</span>
+        <div style="background:var(--panel); border:1px solid var(--acL); border-radius:6px; padding:9px 13px;"><div style="font-size:9.5px; color:var(--fg4); text-transform:uppercase; letter-spacing:.05em;">compare</div><div style="font-size:12px; color:var(--ac);">${esc(d.cmp.id.slice(0, 7))} <span style="color:var(--fg4);">· ${esc(d.cmp.note)}</span></div></div>
+        <div style="margin-left:auto; display:flex; gap:14px;">
+          <div style="text-align:right;"><div style="font-size:18px; font-weight:600; color:var(--cor); font-variant-numeric:tabular-nums;">+${d.improved}</div><div style="font-size:9.5px; color:var(--fg3);">fail → pass</div></div>
+          <div style="text-align:right;"><div style="font-size:18px; font-weight:600; color:var(--wr); font-variant-numeric:tabular-nums;">−${d.regressed}</div><div style="font-size:9.5px; color:var(--fg3);">pass → fail</div></div>
+          <div style="text-align:right;"><div style="font-size:18px; font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums;">${esc(d.net)}</div><div style="font-size:9.5px; color:var(--fg3);">net</div></div>
+        </div>
+      </div>
+      <div style="display:flex; gap:5px; margin-bottom:12px;">${filters}</div>
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+        <div style="display:grid; grid-template-columns:24px 170px 150px 150px 1fr; gap:0 12px; padding:9px 16px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--fg3); border-bottom:1px solid var(--line);"><div></div><div>document</div><div>field</div><div>pipeline</div><div>change</div></div>
+        ${rows || emptyRow('no changes — runs agree on every shared cell')}
+      </div>
+    </div>`;
+  }
+
+  // ===================== FAILURES =====================
+  function failuresView() {
+    const fr = data.failures;
+    if (!fr) return emptyPanel('loading…');
+    const cm = caseMap();
+    const chipDefs = [['all', 'all'], ['wrong', 'wrong'], ['missing', 'missing'], ['hallucinated', 'hallucinated'], ['parse_error', 'parse_error']];
+    const chips = chipDefs.map(([id, label]) => {
+      const active = state.failCase === id;
+      const m = cm[id] || { fg: v('ac') };
+      const count = id === 'all' ? fr.total : (fr.counts[id] || 0);
+      return `<button onclick="App.setFailCase('${id}')" style="display:flex; align-items:center; gap:7px; background:${active ? v('panel2') : 'transparent'}; color:${active ? v('fg') : v('fg2')}; border:1px solid ${active ? (id === 'all' ? v('line') : m.fg) : v('line')}; border-radius:5px; padding:6px 11px; font-size:11px; cursor:pointer;"><span style="color:${id === 'all' ? v('fg3') : m.fg};">●</span>${label}<span style="font-variant-numeric:tabular-nums; opacity:.7; font-weight:600;">${count}</span></button>`;
+    }).join('');
+    const rows = fr.rows.filter(f => state.failCase === 'all' || f.case === state.failCase).slice(0, 300).map(f => {
+      const m = cm[f.case] || cm.wrong;
+      const empty = f.predicted === '—';
+      return `<div style="display:grid; grid-template-columns:150px 130px 130px 110px 1fr 1fr; gap:0 12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line2);">
+        <div style="font-size:11px; color:var(--fg3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(f.doc)}</div>
+        <div style="font-size:11px; color:var(--fg);">${esc(f.field)}</div>
+        <div style="font-size:11px; color:var(--fg2);">${esc(f.pipe)}</div>
+        <div><span style="font-size:10px; color:${m.fg}; background:${m.bg}; padding:2px 7px; border-radius:3px; white-space:nowrap;">${esc(f.case)}</span></div>
+        <div style="font-size:11px; color:${empty ? v('fg4') : v('fg')}; font-style:${empty ? 'italic' : 'normal'}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(f.predicted)}</div>
+        <div style="font-size:11px; color:var(--fg2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(f.expected)} <span style="color:var(--fg4); font-size:9.5px;">· ${esc(f.scorer)}</span></div>
+      </div>`;
+    }).join('');
+    return `
+    <div>
+      <div style="margin-bottom:16px;"><h1 style="margin:0; font-size:17px; font-weight:600; color:var(--fg);">Failure explorer</h1><p style="margin:4px 0 0; font-size:11.5px; color:var(--fg3);">every non-passing field-score in run ${esc((state.runId || '').slice(0, 7))} · ${fr.total} total</p></div>
+      <div style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">${chips}</div>
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+        <div style="display:grid; grid-template-columns:150px 130px 130px 110px 1fr 1fr; gap:0 12px; padding:9px 16px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--fg3); border-bottom:1px solid var(--line);"><div>document</div><div>field</div><div>pipeline</div><div>case</div><div>predicted</div><div>expected</div></div>
+        <div style="max-height:560px; overflow-y:auto;">${rows || emptyRow('no failures 🎉')}</div>
+      </div>
+    </div>`;
+  }
+
+  // ===================== ANALYZE =====================
+  function analyzeView() {
+    const a = data.analyze;
+    if (!a) return emptyPanel('loading…');
+    const bins = a.calBins || [];
+    let calChart;
+    if (bins.length) {
+      const bars = bins.map(b => {
+        const mid = (b.lo + b.hi) / 2;
+        const refH = mid * 100;
+        return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; position:relative;">
+          <span style="font-size:10px; color:var(--fg2); font-variant-numeric:tabular-nums; margin-bottom:5px;">${pct0(b.accuracy)}</span>
+          <div style="width:100%; height:${b.accuracy * 100}%; background:linear-gradient(var(--ac), var(--acD)); border-radius:3px 3px 0 0; position:relative;"><div style="position:absolute; left:0; right:0; bottom:${refH}%; height:1.5px; background:var(--mi); opacity:.7;"></div></div>
+        </div>`;
+      }).join('');
+      const labels = bins.map(b => `<div style="flex:1; text-align:center; font-size:9px; color:var(--fg4);">${b.lo.toFixed(1)}–${b.hi.toFixed(1)}<br>n=${b.n}</div>`).join('');
+      const best = bins[bins.length - 1];
+      calChart = `
+        <div style="display:flex; align-items:flex-end; gap:14px; height:160px; padding:0 6px; border-bottom:1px solid var(--line); margin-bottom:8px;">${bars}</div>
+        <div style="display:flex; gap:14px; padding:0 6px;">${labels}</div>
+        <div style="display:flex; gap:8px; margin-top:16px; padding-top:14px; border-top:1px solid var(--line2);">
+          <div style="flex:1; background:var(--panel2); border-radius:5px; padding:10px 12px;"><div style="font-size:9.5px; color:var(--fg3); text-transform:uppercase; letter-spacing:.05em;">overall</div><div style="font-size:17px; font-weight:600; color:var(--fg); font-variant-numeric:tabular-nums;">${a.overall}%</div></div>
+          <div style="flex:1; background:var(--corD); border-radius:5px; padding:10px 12px;"><div style="font-size:9.5px; color:var(--cor); text-transform:uppercase; letter-spacing:.05em;">top conf bin</div><div style="font-size:17px; font-weight:600; color:var(--cor); font-variant-numeric:tabular-nums;">${pct1(best.accuracy)}%</div></div>
+          <div style="flex:2; display:flex; align-items:center; font-size:10.5px; color:var(--fg3); padding-left:4px; line-height:1.5;">Bars = accuracy per confidence bin; tick = perfect-calibration reference (bin midpoint).</div>
+        </div>`;
+    } else {
+      calChart = `<div style="padding:30px 8px; text-align:center; color:var(--fg4); font-size:11px;">No confidence emitted by this run's pipelines — calibration needs adapters that report per-field confidence.</div>`;
+    }
+
+    const paired = (a.paired || []).map(p => `<div style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line2);">
+      <div style="flex:1; font-size:11px; color:var(--fg2);">${esc(p.label)}</div>
+      <div style="font-size:13px; font-weight:600; color:var(--cor); font-variant-numeric:tabular-nums;">${esc(p.delta)}</div>
+      <div style="font-size:10px; color:var(--fg4); font-variant-numeric:tabular-nums; width:54px; text-align:right;">±${esc(p.ci)}</div>
+      <div style="width:96px; text-align:right;"><span style="font-size:9.5px; color:${p.significant ? v('cor') : v('mi')}; background:${p.significant ? v('corD') : v('miD')}; padding:2px 7px; border-radius:3px;">${p.significant ? 'significant' : 'within noise'}</span></div>
+    </div>`).join('') || emptyRow('need ≥2 pipelines to compare');
+
+    const strat = (a.strategy || []).map(s => `<div style="margin-bottom:13px;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span style="font-size:11px; color:var(--fg2);">${esc(s.label)}</span><span style="font-size:11px; color:var(--fg); font-weight:600; font-variant-numeric:tabular-nums;">${esc(s.pct)}</span></div>
+      <div style="height:4px; background:var(--panel2); border-radius:2px; overflow:hidden;"><div style="height:100%; width:${s.w}%; background:var(--ac);"></div></div>
+      <div style="font-size:9.5px; color:var(--fg4); margin-top:4px;">${esc(s.note)}</div>
+    </div>`).join('') || `<div style="font-size:10.5px; color:var(--fg4); padding:6px 0;">No strategy flags recorded — meta-pipelines (cascade/verify/ensemble) emit these in result extras.</div>`;
+
+    return `
+    <div>
+      <div style="margin-bottom:16px;"><h1 style="margin:0; font-size:17px; font-weight:600; color:var(--fg);">Analyze</h1><p style="margin:4px 0 0; font-size:11.5px; color:var(--fg3);">calibration · paired comparison · extraction-strategy diagnostics</p></div>
+      <div style="display:grid; grid-template-columns:1.3fr 1fr; gap:16px; align-items:start;">
+        <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;"><span style="font-size:13px; font-weight:600; color:var(--fg);">Confidence calibration</span><span style="font-size:10.5px; color:var(--fg3);">${a.nConf} preds w/ confidence</span></div>
+          <p style="margin:0 0 18px; font-size:11px; color:var(--fg3);">accuracy within each predicted-confidence bucket</p>
+          ${calChart}
+        </div>
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px;">
+            <span style="font-size:13px; font-weight:600; color:var(--fg);">Paired comparison</span>
+            <p style="margin:4px 0 14px; font-size:11px; color:var(--fg3);">accuracy delta vs the leader on shared docs ± bootstrap CI</p>
+            ${paired}
+          </div>
+          <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px;">
+            <span style="font-size:13px; font-weight:600; color:var(--fg);">Strategy flags</span>
+            <p style="margin:4px 0 14px; font-size:11px; color:var(--fg3);">meta-pipeline behavior rates</p>
+            ${strat}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ===================== BUDGET MODAL (estimate-only) =====================
+  function budgetData() {
+    const board = (data.leaderboard && data.leaderboard.board) || [];
+    const rows = board.map(b => {
+      const per = b.docs ? b.cost_usd / b.docs : 0;
+      const est = per * state.sampleN;
+      return { name: b.pipeline, per, est };
+    });
+    const total = rows.reduce((s, r) => s + r.est, 0);
+    return { rows, total, over: total > state.budgetCap };
+  }
+  function budgetCompute() {
+    const bd = budgetData();
+    const rows = bd.rows.map(r => `<div style="display:grid; grid-template-columns:1fr 70px 70px 90px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--line2); font-size:11px;">
+      <span style="color:var(--fg2);">${esc(r.name)}</span>
+      <span style="color:var(--fg4); text-align:right; font-variant-numeric:tabular-nums;">${state.sampleN}×</span>
+      <span style="color:var(--fg4); text-align:right; font-variant-numeric:tabular-nums;">$${r.per.toFixed(3)}</span>
+      <span style="text-align:right; font-variant-numeric:tabular-nums; color:${r.est > state.budgetCap ? v('wr') : v('fg2')};">$${r.est.toFixed(2)}</span>
+    </div>`).join('') || emptyRow('this run recorded no cost (e.g. the fake adapter)');
+    const over = bd.over;
+    const cmd = `ezpz run <experiment.yaml> --sample ${state.sampleN} --budget-usd ${state.budgetCap}`;
+    return `
+      <code style="display:block; font-size:11px; color:var(--fg2); background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:9px 11px; margin-bottom:16px;"><span style="color:var(--ac);">ezpz</span> run &lt;experiment.yaml&gt; --sample ${state.sampleN} --budget-usd ${state.budgetCap}</code>
+      <div style="border:1px solid var(--line); border-radius:6px; overflow:hidden; margin-bottom:16px;">
+        ${rows}
+        <div style="display:grid; grid-template-columns:1fr 90px; align-items:center; padding:10px 12px; background:var(--panel2); font-size:12px;"><span style="color:var(--fg2);">estimated total</span><span style="text-align:right; font-weight:600; font-variant-numeric:tabular-nums; color:${over ? v('wr') : v('cor')};">$${bd.total.toFixed(2)}</span></div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:6px; background:${over ? v('wrD') : v('corD')}; border:1px solid ${over ? v('wr') : v('cor')}; margin-bottom:16px;">
+        <span style="font-size:14px; color:${over ? v('wr') : v('cor')};">${over ? '✗' : '✓'}</span>
+        <span style="font-size:11px; color:${over ? v('wr') : v('cor')};">${over ? `projected $${bd.total.toFixed(2)} exceeds cap $${state.budgetCap} — ezpz run would refuse before any API call` : `projected $${bd.total.toFixed(2)} within $${state.budgetCap} cap, based on this run's observed cost/doc`}</span>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:space-between; align-items:center;">
+        <span style="font-size:10px; color:var(--fg4);">estimate-only · runs from your terminal — the viewer never spends</span>
+        <div style="display:flex; gap:8px;">
+          <button onclick="App.closeBudget()" style="background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:5px; padding:8px 14px; font-size:11.5px; cursor:pointer;">cancel</button>
+          <button onclick="App.copyCommand('${esc(cmd)}')" style="background:var(--ac); color:#fff; border:1px solid var(--ac); border-radius:5px; padding:8px 16px; font-size:11.5px; font-weight:600; cursor:pointer;" id="copyBtn">copy run command</button>
+        </div>
+      </div>`;
+  }
+  function budgetModal() {
+    if (!state.budgetOpen) return '';
+    const r = curRun();
+    const maxN = Math.max(10, r.n || 50);
+    return `
+    <div onclick="App.closeBudget()" style="position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; padding:24px;">
+      <div onclick="event.stopPropagation()" style="width:560px; max-width:100%; background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.5);">
+        <div style="padding:16px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between;">
+          <div><div style="font-size:13px; font-weight:600; color:var(--fg);">Run experiment — budget estimate</div><div style="font-size:10.5px; color:var(--fg3); margin-top:2px;">projects cost from this run's observed $/doc · estimate-only</div></div>
+          <button onclick="App.closeBudget()" style="background:none; border:none; color:var(--fg3); font-size:18px; cursor:pointer;">×</button>
+        </div>
+        <div style="padding:18px 20px;">
+          <div style="display:flex; gap:18px; margin-bottom:18px;">
+            <div style="flex:1;"><div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--fg3); margin-bottom:6px;"><span>sample size</span><span id="sampleLabel" style="color:var(--fg); font-variant-numeric:tabular-nums;">${state.sampleN} docs</span></div><input type="range" min="10" max="${maxN}" step="10" value="${Math.min(state.sampleN, maxN)}" oninput="App.onSample(this.value)" style="width:100%;"></div>
+            <div style="flex:1;"><div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--fg3); margin-bottom:6px;"><span>budget cap</span><span id="capLabel" style="color:var(--fg); font-variant-numeric:tabular-nums;">$${state.budgetCap}.00</span></div><input type="range" min="5" max="60" step="1" value="${state.budgetCap}" oninput="App.onCap(this.value)" style="width:100%;"></div>
+          </div>
+          <div id="budgetCompute">${budgetCompute()}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ---- helpers / shell ----
+  const emptyRow = msg => `<div style="padding:26px 18px; text-align:center; color:var(--fg4); font-size:11px;">${esc(msg)}</div>`;
+  const emptyPanel = msg => `<div style="background:var(--panel); border:1px solid var(--line); border-radius:8px;">${emptyRow(msg)}</div>`;
+
+  function viewBody() {
+    if (!state.runId) return emptyPanel('No runs found — run `ezpz run <experiment>` first.');
+    switch (state.view) {
+      case 'leaderboard': return leaderboardView();
+      case 'documents': return documentsView();
+      case 'diff': return diffView();
+      case 'failures': return failuresView();
+      case 'analyze': return analyzeView();
+    }
+  }
+  function render() {
+    document.getElementById('root').innerHTML =
+      topbar() + cliBar() + `<div style="max-width:1280px; margin:0 auto; padding:22px;">` + viewBody() + `</div>` + budgetModal();
+  }
+
+  // ---- public handlers ----
+  return {
+    async init() {
+      const q = new URLSearchParams(location.search);
+      const views = ['leaderboard', 'documents', 'diff', 'failures', 'analyze'];
+      if (views.includes(q.get('view'))) state.view = q.get('view');
+      if (['dark', 'light'].includes(q.get('theme'))) state.theme = q.get('theme');
+      if (q.get('run')) state.runId = q.get('run');
+      if (q.get('budget') === '1') state.budgetOpen = true;
+      applyTheme(); render(); await loadState(); await loadView();
+    },
+    toggleTheme() { state.theme = state.theme === 'dark' ? 'light' : 'dark'; applyTheme(); render(); },
+    go(view) { state.view = view; state.runMenuOpen = false; render(); loadView(); },
+    toggleRunMenu(e) { if (e) e.stopPropagation(); state.runMenuOpen = !state.runMenuOpen; render(); },
+    closeRunMenu() { state.runMenuOpen = false; render(); },
+    selectRun(id) { state.runId = id; state.runMenuOpen = false; state.selectedDoc = null; state.selectedField = null; state.diffBase = null; render(); loadView(); },
+    setSlice(id) { state.slice = id; render(); loadView(); },
+    selectDoc(id) { state.selectedDoc = id; state.selectedField = null; render(); loadView(); },
+    selectField(f) { state.selectedField = (state.selectedField === f ? null : f); render(); },
+    setDiffFilter(id) { state.diffFilter = id; render(); },
+    setFailCase(id) { state.failCase = id; render(); },
+    openBudget() { state.budgetOpen = true; state.runMenuOpen = false; render(); },
+    closeBudget() { state.budgetOpen = false; render(); },
+    onSample(val) { state.sampleN = +val; patchBudget(); },
+    onCap(val) { state.budgetCap = +val; patchBudget(); },
+    copyCommand(cmd) {
+      const text = cmd.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      navigator.clipboard && navigator.clipboard.writeText(text);
+      const btn = document.getElementById('copyBtn');
+      if (btn) { btn.textContent = 'copied ✓'; setTimeout(() => { if (btn) btn.textContent = 'copy run command'; }, 1400); }
+    },
+  };
+
+  function patchBudget() {
+    const sl = document.getElementById('sampleLabel'); if (sl) sl.textContent = state.sampleN + ' docs';
+    const cl = document.getElementById('capLabel'); if (cl) cl.textContent = '$' + state.budgetCap + '.00';
+    const c = document.getElementById('budgetCompute'); if (c) c.innerHTML = budgetCompute();
+  }
+})();
+App.init();
+</script>
+</body>
+</html>

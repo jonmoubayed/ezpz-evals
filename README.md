@@ -8,7 +8,7 @@ A **local-first** harness for evaluating unstructured-document pipelines (extrac
 retrieval/QA later) and comparing tools/models side by side on the same cohort.
 
 > Status: **implemented end-to-end (M0–M7)** — extraction, central normalization, pluggable
-> scoring, raw-response caching, SQLite + content-addressed blobs, a Streamlit viewer, adapters
+> scoring, raw-response caching, SQLite + content-addressed blobs, a built-in web viewer, adapters
 > (Gemini · Anthropic · OpenAI · any OpenAI-compatible/local endpoint · Extend · LlamaIndex · a
 > no-network `fake`), and M7 hardening (per-provider concurrency, retries, circuit breaker, budget
 > guard, resumability, machine-readable output + CI gating).
@@ -35,7 +35,8 @@ before scoring so `"Jan 3 2024"` and `"2024-01-03"` compare equal across every t
 - `store/`       — SQLite for results, content-addressed blob store for raw artifacts.
 - `config/`      — declarative experiment config (the backbone; version it).
 - `cli/`         — `init / validate / run / score / compare / view`.
-- `ui/`          — local viewer (leaderboard, per-doc drill-down, run diff).
+- `ui/`          — local web viewer (leaderboard · per-doc drill-down · run diff · failures ·
+  analyze); a stdlib HTTP server over a read-only JSON API, **no extra deps**.
 
 ## Install (adapter deps are optional extras — install per tool)
 
@@ -46,7 +47,7 @@ pip install -e ".[anthropic]"     # + Anthropic (Claude) adapter
 pip install -e ".[openai]"        # + OpenAI adapter (also powers `openai_compatible`, see below)
 pip install -e ".[extend]"        # + Extend adapter
 pip install -e ".[llamaindex]"    # + LlamaIndex adapter
-pip install -e ".[ui,dev]"        # viewer + dev tooling
+pip install -e ".[dev]"           # dev tooling (the `ezpz view` viewer needs no extra)
 ```
 
 ## Quickstart
@@ -57,7 +58,7 @@ ezpz validate examples/experiments/fake_invoice_smoke.yaml
 ezpz run      examples/experiments/fake_invoice_smoke.yaml
 ezpz score    <run_id>                      # re-score cached extractions (fast, free)
 ezpz compare  <run_id_a> <run_id_b>
-ezpz view                                   # Streamlit viewer  (pip install -e ".[ui]")
+ezpz view                                   # web viewer — opens in your browser (no extra deps)
 
 # real 3-way LLM comparison (needs ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY):
 ezpz run      examples/experiments/claude_vs_gemini_vs_openai.yaml --budget-usd 5

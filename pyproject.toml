@@ -43,7 +43,7 @@ openai = ["openai>=1.40"]                 # OpenAI SDK
 extend = ["httpx>=0.27"]                  # REST adapter; swap for official SDK if available
 llamaindex = ["llama-index>=0.11", "llama-index-llms-openai", "llama-parse"]
 embeddings = ["numpy"]                     # for embedding-similarity scorer
-ui = ["streamlit>=1.36", "pandas>=2"]
+ui = []                                    # viewer is Python stdlib only (`ezpz view`); kept for back-compat
 dev = ["pytest>=8", "ruff", "mypy", "types-PyYAML"]
 
 [project.scripts]
@@ -51,11 +51,11 @@ ezpz = "ezpz.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ezpz"]
+artifacts = ["src/ezpz/ui/static/*"]   # ship the viewer SPA (non-.py) in the wheel
 
 [[tool.mypy.overrides]]
-# Optional adapter SDKs + the UI extra aren't installed in the base/dev env.
+# Optional adapter SDKs aren't installed in the base/dev env.
 module = [
     "google.*", "anthropic.*", "openai.*", "httpx", "llama_index.*", "llama_parse",
-    "streamlit.*", "pandas.*",
 ]
 ignore_missing_imports = true
