@@ -464,9 +464,10 @@ Each spec follows the same template: **Responsibility / Interface / Key decision
   drill-down** (columns per pipeline of predicted vs GT, color-coded correct/wrong/missing/
   hallucinated, confidence + provenance where available, rendered source alongside), **run diff**
   (which fields/docs improved or regressed, with a base-run picker), a **failure explorer**, and
-  **analyze** (confidence calibration · paired comparison · strategy-flag rates). A budget modal
-  estimates a run's cost from observed $/doc and can **launch a budget-gated re-run** of the
-  experiment (the one write path).
+  **analyze** (cost×accuracy Pareto · confidence calibration · paired comparison · strategy-flag
+  rates). The leaderboard carries a **per-field accuracy heatmap**; a ⤓ button exports the run
+  (`/api/export`); view state is URL-synced. A budget modal estimates a run's cost from observed
+  $/doc and can **launch a budget-gated, cooperatively-cancellable re-run** (the one write path).
 - **Structure:** `ui/data.py` holds framework-free read view-models (pure functions over
   `SqliteStore`); `ui/server.py` is a stdlib `http.server` exposing a socket-free, unit-testable
   `api_route(store, path, query)` + static/source serving + `POST /api/run`; `ui/launch.py`

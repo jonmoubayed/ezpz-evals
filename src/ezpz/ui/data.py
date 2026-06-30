@@ -340,6 +340,55 @@ def drilldown(store: SqliteStore, run_id: str, doc_id: str) -> dict:
     }
 
 
+def field_breakdown(store: SqliteStore, run_id: str) -> dict:
+    """Per-field × per-pipeline micro accuracy — the heatmap under the leaderboard. Surfaces which
+    fields each tool struggles on (the leaderboard only shows the per-pipeline aggregate)."""
+    run = store.load_run(run_id)
+    task = store.load_task(run.task_ref)
+    scores = store.load_scores(run_id)
+    pipelines = [{"pipeline_id": pc.config_hash, "label": _label(pc)} for pc in run.pipelines]
+
+    # (field, pipeline) -> [pass/fail]
+    acc: dict[tuple[str, str], list[float]] = {}
+    for s in scores:
+        acc.setdefault((s.field, s.pipeline_id), []).append(1.0 if s.passed else 0.0)
+
+    rows = []
+    for field in task.fields:
+        cells = {}
+        for pc in run.pipelines:
+            passes = acc.get((field.name, pc.config_hash))
+            cells[pc.config_hash] = (
+                round(sum(passes) / len(passes), 4) if passes else None  # None = not scored here
+            )
+        if any(v is not None for v in cells.values()):
+            rows.append({"field": field.name, "type": field.type.value, "cells": cells})
+    return {"pipelines": pipelines, "fields": rows}
+
+
+def cost_accuracy(store: SqliteStore, run_id: str) -> dict:
+    """Cost/doc vs accuracy per pipeline + the Pareto frontier (no pipeline is both cheaper AND
+    more accurate than a frontier point). The decision view: most accuracy per dollar."""
+    rows = leaderboard(store, run_id)
+    points = []
+    for r in rows:
+        docs = r.get("docs") or 0
+        points.append({
+            "label": r["pipeline"], "pipeline_id": r["pipeline_id"],
+            "accuracy": r["accuracy"], "cost_per_doc": (r["cost_usd"] / docs) if docs else 0.0,
+            "strategy": r["strategy"],
+        })
+    # a point is on the frontier if nothing else is cheaper-or-equal AND more-accurate-or-equal
+    for p in points:
+        p["pareto"] = not any(
+            q is not p and q["cost_per_doc"] <= p["cost_per_doc"]
+            and q["accuracy"] >= p["accuracy"]
+            and (q["cost_per_doc"] < p["cost_per_doc"] or q["accuracy"] > p["accuracy"])
+            for q in points
+        )
+    return {"points": points}
+
+
 def run_diff(store: SqliteStore, run_a: str, run_b: str) -> dict:
     """run_a is the NEW run, run_b the baseline. A field flipping fail->pass is an improvement."""
     run = store.load_run(run_a)
