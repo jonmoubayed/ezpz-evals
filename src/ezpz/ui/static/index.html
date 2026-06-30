@@ -31,7 +31,7 @@ const App = (() => {
   const state = {
     theme: 'dark', view: 'leaderboard', runId: null, slice: 'all',
     selectedDoc: null, selectedField: null, failCase: 'all', diffFilter: 'all', diffBase: null,
-    runMenuOpen: false, budgetOpen: false, sampleN: 50, budgetCap: 25,
+    runMenuOpen: false, budgetOpen: false, sampleN: 50, budgetCap: 25, runJob: null,
   };
   let data = {};            // per-view fetched payloads
   let runMeta = { runs: [] };
@@ -175,13 +175,16 @@ const App = (() => {
   }
 
   function cliBar() {
-    const r = (state.runId || '').slice(0, 7);
+    // real, copy-pasteable commands that produce the equivalent output (the viewer reads SQLite;
+    // these CLI verbs read the same DB). Leaderboard ≈ the matrix `score` re-prints (free).
+    const r = state.runId || '';
+    const base = (state.diffBase || (data.diff && data.diff.base.id) || '');
     const map = {
-      leaderboard: `view --run ${r} --tab leaderboard --slice ${state.slice}`,
-      documents: `view --run ${r} --tab documents`,
-      diff: `compare ${(state.diffBase || (data.diff && data.diff.base.id) || '').slice(0, 7)} ${r} --by field`,
-      failures: `view --run ${r} --failures --case ${state.failCase}`,
-      analyze: `analyze --run ${r} --calibration --strategy-flags`,
+      leaderboard: `score ${r}`,
+      documents: `export ${r}`,
+      diff: `compare ${base} ${r}`,
+      failures: `export ${r}`,
+      analyze: `analyze ${r}`,
     };
     return `
     <div style="background:var(--panel); border-bottom:1px solid var(--line);">
@@ -371,24 +374,34 @@ const App = (() => {
 
   function sourcePanel(doc) {
     let body = `<div style="color:var(--fg4); font-size:10.5px; line-height:1.6;">Click a field row to trace its source.</div>`;
+    let pageLabel = 'page 1';
     if (doc) {
-      const text = doc.doc.source_text;
-      let prov = '';
+      const dd = doc.doc;
+      pageLabel = dd.pages > 1 ? `page 1 / ${dd.pages}` : 'page 1';
+      // provenance for the selected field (first emitting cell)
+      let selProv = null;
       if (state.selectedField) {
         const f = doc.fields.find(x => x.field === state.selectedField);
-        const provs = f ? Object.entries(f.cells).map(([, c]) => c.provenance).filter(Boolean) : [];
-        if (provs.length) {
-          const p = provs[0];
-          prov = `<div style="margin-top:10px; font-size:10px; color:var(--fg3); line-height:1.6;"><span style="color:var(--ac);">${esc(state.selectedField)}</span> provenance — ${p.page != null ? 'page ' + p.page + ' · ' : ''}${p.bbox ? 'bbox [' + p.bbox.map(n => (+n).toFixed(0)).join(', ') + ']' : ''}${p.text_span ? '“' + esc(String(p.text_span).slice(0, 60)) + '”' : ''}</div>`;
-        } else {
-          prov = `<div style="margin-top:10px; font-size:10px; color:var(--fg4); line-height:1.6;">No provenance for <span style="color:var(--fg3);">${esc(state.selectedField)}</span> — shown for adapters that emit it.</div>`;
-        }
+        selProv = f ? Object.values(f.cells).map(c => c.provenance).find(Boolean) || null : null;
+      }
+      let prov = '';
+      if (state.selectedField) {
+        prov = selProv
+          ? `<div style="margin-top:10px; font-size:10px; color:var(--fg3); line-height:1.6;"><span style="color:var(--ac);">${esc(state.selectedField)}</span> provenance — ${selProv.page != null ? 'page ' + selProv.page + ' · ' : ''}${selProv.bbox ? 'bbox [' + selProv.bbox.map(n => (+n).toFixed(2)).join(', ') + ']' : ''}${selProv.text_span ? '“' + esc(String(selProv.text_span).slice(0, 60)) + '”' : ''}</div>`
+          : `<div style="margin-top:10px; font-size:10px; color:var(--fg4); line-height:1.6;">No provenance for <span style="color:var(--fg3);">${esc(state.selectedField)}</span> — shown for adapters that emit it.</div>`;
       }
       let page;
-      if (text) {
-        let shown = esc(text);
-        const f = state.selectedField && doc.fields.find(x => x.field === state.selectedField);
-        const span = f && Object.values(f.cells).map(c => c.provenance && c.provenance.text_span).find(Boolean);
+      if (dd.is_image) {
+        // real document image + bbox overlay (bbox treated as normalized 0..1 fractions of the page)
+        let box = '';
+        if (selProv && selProv.bbox && selProv.bbox.length === 4) {
+          const [x0, y0, x1, y1] = selProv.bbox.map(Number);
+          box = `<div style="position:absolute; left:${x0 * 100}%; top:${y0 * 100}%; width:${(x1 - x0) * 100}%; height:${(y1 - y0) * 100}%; border:1.5px solid var(--ac); background:var(--acD); border-radius:2px;"><span style="position:absolute; top:-15px; left:0; font-size:8.5px; color:var(--acT); white-space:nowrap;">${esc(state.selectedField)}</span></div>`;
+        }
+        page = `<div style="position:relative; line-height:0;"><img src="/api/source?run=${encodeURIComponent(doc.run)}&doc=${encodeURIComponent(dd.doc_id)}" style="width:100%; border-radius:3px; display:block;">${box}</div>`;
+      } else if (dd.source_text) {
+        let shown = esc(dd.source_text);
+        const span = selProv && selProv.text_span;
         if (span) { const e = esc(span); shown = shown.split(e).join('<mark>' + e + '</mark>'); }
         page = `<pre style="margin:0; white-space:pre-wrap; word-break:break-word; font-size:10px; line-height:1.55; color:var(--fg2); font-family:inherit; max-height:380px; overflow:auto;">${shown}</pre>`;
       } else {
@@ -402,7 +415,7 @@ const App = (() => {
     }
     return `
     <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; position:sticky; top:120px;">
-      <div style="padding:10px 13px; border-bottom:1px solid var(--line); font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--fg3); display:flex; justify-content:space-between;"><span>source</span><span style="color:var(--fg4);">page 1</span></div>
+      <div style="padding:10px 13px; border-bottom:1px solid var(--line); font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--fg3); display:flex; justify-content:space-between;"><span>source</span><span style="color:var(--fg4);">${pageLabel}</span></div>
       <div style="padding:14px;">${body}</div>
     </div>`;
   }
@@ -416,6 +429,12 @@ const App = (() => {
       const on = state.diffFilter === id;
       return `<button onclick="App.setDiffFilter('${id}')" style="background:${on ? v('acD') : 'transparent'}; color:${on ? v('acT') : v('fg3')}; border:1px solid ${on ? v('acL') : v('line')}; border-radius:4px; padding:5px 11px; font-size:11px; cursor:pointer;">${esc(label)}</button>`;
     }).join('');
+    // base picker: other runs on the same dataset × task as the current (compare) run
+    const cur = curRun();
+    const candidates = (runMeta.runs || []).filter(rr => rr.id !== d.cmp.id && rr.ds === cur.ds && rr.task === cur.task);
+    const baseOptions = candidates.length
+      ? candidates.map(rr => `<option value="${rr.id}" ${rr.id === d.base.id ? 'selected' : ''}>${esc(rr.id.slice(0, 7))} · ${pct1(rr.acc)}% · ${esc(rr.ago)}</option>`).join('')
+      : `<option value="${d.base.id}" selected>${esc(d.base.id.slice(0, 7))}</option>`;
     const rows = d.rows.filter(r => state.diffFilter === 'all' || r.dir === state.diffFilter).slice(0, 200).map(r => {
       const isImp = r.dir === 'improved';
       const fromM = cm[r.from_case], toM = cm[r.to_case];
@@ -435,7 +454,7 @@ const App = (() => {
     <div>
       <div style="margin-bottom:16px;"><h1 style="margin:0; font-size:17px; font-weight:600; color:var(--fg);">Run diff</h1><p style="margin:4px 0 0; font-size:11.5px; color:var(--fg3);">field-scores that changed between two runs of the same dataset × task</p></div>
       <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
-        <div style="background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:9px 13px;"><div style="font-size:9.5px; color:var(--fg4); text-transform:uppercase; letter-spacing:.05em;">base</div><div style="font-size:12px; color:var(--fg2);">${esc(d.base.id.slice(0, 7))} <span style="color:var(--fg4);">· ${esc(d.base.note)}</span></div></div>
+        <div style="background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:9px 13px;"><div style="font-size:9.5px; color:var(--fg4); text-transform:uppercase; letter-spacing:.05em;">base</div><select onchange="App.setDiffBase(this.value)" style="margin-top:2px; background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:4px; padding:3px 6px; font-family:inherit; font-size:12px; cursor:pointer;">${baseOptions}</select></div>
         <span style="color:var(--fg4);">→</span>
         <div style="background:var(--panel); border:1px solid var(--acL); border-radius:6px; padding:9px 13px;"><div style="font-size:9.5px; color:var(--fg4); text-transform:uppercase; letter-spacing:.05em;">compare</div><div style="font-size:12px; color:var(--ac);">${esc(d.cmp.id.slice(0, 7))} <span style="color:var(--fg4);">· ${esc(d.cmp.note)}</span></div></div>
         <div style="margin-left:auto; display:flex; gap:14px;">
@@ -565,6 +584,21 @@ const App = (() => {
     const total = rows.reduce((s, r) => s + r.est, 0);
     return { rows, total, over: total > state.budgetCap };
   }
+  function runStatusHtml() {
+    const j = state.runJob;
+    if (!j) return '';
+    const map = {
+      starting: [v('ac'), v('acD'), '⟳', 'launching…'],
+      running: [v('ac'), v('acD'), '⟳', `running ${(j.run_id || '').slice(0, 7)}… ${j.uncached_cells != null ? '· ' + j.uncached_cells + ' uncached cells' : ''}`],
+      complete: [v('cor'), v('corD'), '✓', `run ${(j.run_id || '').slice(0, 7)} complete — switching…`],
+      refused: [v('wr'), v('wrD'), '✗', 'refused: ' + (j.error || 'over budget')],
+      failed: [v('wr'), v('wrD'), '✗', 'failed: ' + (j.error || 'unknown')],
+      error: [v('wr'), v('wrD'), '✗', j.error || 'error'],
+    };
+    const [fg, bg, icon, msg] = map[j.status] || map.error;
+    return `<div style="display:flex; align-items:center; gap:9px; padding:9px 12px; border-radius:6px; background:${bg}; border:1px solid ${fg}; margin-bottom:14px;"><span style="font-size:13px; color:${fg};">${icon}</span><span style="font-size:11px; color:${fg};">${esc(msg)}</span></div>`;
+  }
+
   function budgetCompute() {
     const bd = budgetData();
     const rows = bd.rows.map(r => `<div style="display:grid; grid-template-columns:1fr 70px 70px 90px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--line2); font-size:11px;">
@@ -574,6 +608,7 @@ const App = (() => {
       <span style="text-align:right; font-variant-numeric:tabular-nums; color:${r.est > state.budgetCap ? v('wr') : v('fg2')};">$${r.est.toFixed(2)}</span>
     </div>`).join('') || emptyRow('this run recorded no cost (e.g. the fake adapter)');
     const over = bd.over;
+    const running = !!state.runJob && ['starting', 'running'].includes(state.runJob.status);
     const cmd = `ezpz run <experiment.yaml> --sample ${state.sampleN} --budget-usd ${state.budgetCap}`;
     return `
       <code style="display:block; font-size:11px; color:var(--fg2); background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:9px 11px; margin-bottom:16px;"><span style="color:var(--ac);">ezpz</span> run &lt;experiment.yaml&gt; --sample ${state.sampleN} --budget-usd ${state.budgetCap}</code>
@@ -581,15 +616,17 @@ const App = (() => {
         ${rows}
         <div style="display:grid; grid-template-columns:1fr 90px; align-items:center; padding:10px 12px; background:var(--panel2); font-size:12px;"><span style="color:var(--fg2);">estimated total</span><span style="text-align:right; font-weight:600; font-variant-numeric:tabular-nums; color:${over ? v('wr') : v('cor')};">$${bd.total.toFixed(2)}</span></div>
       </div>
-      <div style="display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:6px; background:${over ? v('wrD') : v('corD')}; border:1px solid ${over ? v('wr') : v('cor')}; margin-bottom:16px;">
+      <div style="display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:6px; background:${over ? v('wrD') : v('corD')}; border:1px solid ${over ? v('wr') : v('cor')}; margin-bottom:14px;">
         <span style="font-size:14px; color:${over ? v('wr') : v('cor')};">${over ? '✗' : '✓'}</span>
-        <span style="font-size:11px; color:${over ? v('wr') : v('cor')};">${over ? `projected $${bd.total.toFixed(2)} exceeds cap $${state.budgetCap} — ezpz run would refuse before any API call` : `projected $${bd.total.toFixed(2)} within $${state.budgetCap} cap, based on this run's observed cost/doc`}</span>
+        <span style="font-size:11px; color:${over ? v('wr') : v('cor')};">${over ? `projected $${bd.total.toFixed(2)} exceeds cap $${state.budgetCap} — the run is refused before any API call` : `projected $${bd.total.toFixed(2)} within $${state.budgetCap} cap, based on this run's observed cost/doc`}</span>
       </div>
+      ${runStatusHtml()}
       <div style="display:flex; gap:8px; justify-content:space-between; align-items:center;">
-        <span style="font-size:10px; color:var(--fg4);">estimate-only · runs from your terminal — the viewer never spends</span>
+        <span style="font-size:10px; color:var(--fg4);">re-runs this experiment, budget-gated · cached cells are free</span>
         <div style="display:flex; gap:8px;">
           <button onclick="App.closeBudget()" style="background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:5px; padding:8px 14px; font-size:11.5px; cursor:pointer;">cancel</button>
-          <button onclick="App.copyCommand('${esc(cmd)}')" style="background:var(--ac); color:#fff; border:1px solid var(--ac); border-radius:5px; padding:8px 16px; font-size:11.5px; font-weight:600; cursor:pointer;" id="copyBtn">copy run command</button>
+          <button onclick="App.copyCommand('${esc(cmd)}')" style="background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:5px; padding:8px 14px; font-size:11.5px; cursor:pointer;" id="copyBtn">copy command</button>
+          <button onclick="App.confirmRun()" ${running || over ? 'disabled' : ''} style="background:${over || running ? v('panel2') : v('ac')}; color:${over || running ? v('fg4') : '#fff'}; border:1px solid ${over || running ? v('line') : v('ac')}; border-radius:5px; padding:8px 16px; font-size:11.5px; font-weight:600; cursor:${over || running ? 'not-allowed' : 'pointer'};">${running ? 'running…' : 'confirm & run'}</button>
         </div>
       </div>`;
   }
@@ -655,8 +692,24 @@ const App = (() => {
     selectField(f) { state.selectedField = (state.selectedField === f ? null : f); render(); },
     setDiffFilter(id) { state.diffFilter = id; render(); },
     setFailCase(id) { state.failCase = id; render(); },
-    openBudget() { state.budgetOpen = true; state.runMenuOpen = false; render(); },
-    closeBudget() { state.budgetOpen = false; render(); },
+    openBudget() { state.budgetOpen = true; state.runMenuOpen = false; state.runJob = null; render(); },
+    closeBudget() { state.budgetOpen = false; state.runJob = null; render(); },
+    async confirmRun() {
+      if (budgetData().over || (state.runJob && ['starting', 'running'].includes(state.runJob.status))) return;
+      state.runJob = { status: 'starting' };
+      patchBudget();
+      try {
+        const res = await fetch('/api/run', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run: state.runId, sample: state.sampleN, cap: state.budgetCap }),
+        });
+        state.runJob = await res.json();
+      } catch (e) {
+        state.runJob = { status: 'error', error: String(e) };
+      }
+      patchBudget();
+      if (state.runJob.status === 'running') pollRun(state.runJob.run_id);
+    },
     onSample(val) { state.sampleN = +val; patchBudget(); },
     onCap(val) { state.budgetCap = +val; patchBudget(); },
     copyCommand(cmd) {
@@ -671,6 +724,23 @@ const App = (() => {
     const sl = document.getElementById('sampleLabel'); if (sl) sl.textContent = state.sampleN + ' docs';
     const cl = document.getElementById('capLabel'); if (cl) cl.textContent = '$' + state.budgetCap + '.00';
     const c = document.getElementById('budgetCompute'); if (c) c.innerHTML = budgetCompute();
+  }
+
+  function pollRun(runId) {
+    const tick = async () => {
+      let j;
+      try { j = await (await fetch('/api/run_status?run=' + encodeURIComponent(runId))).json(); }
+      catch (e) { state.runJob = { status: 'error', error: String(e) }; patchBudget(); return; }
+      state.runJob = j;
+      if (j.status === 'running' || j.status === 'starting') { patchBudget(); setTimeout(tick, 1000); return; }
+      patchBudget();
+      if (j.status === 'complete') {
+        await loadState();                      // pick up the new run in the switcher
+        state.runId = runId; state.selectedDoc = null; state.diffBase = null;
+        setTimeout(() => { state.budgetOpen = false; state.runJob = null; render(); loadView(); }, 700);
+      }
+    };
+    setTimeout(tick, 800);
   }
 })();
 App.init();

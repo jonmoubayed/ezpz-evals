@@ -11,7 +11,7 @@ from ezpz.engine.cache import RawResponseCache
 from ezpz.engine.executor import Executor
 from ezpz.store.blobs import BlobStore
 from ezpz.store.sqlite import SqliteStore
-from ezpz.ui.server import api_route
+from ezpz.ui.server import _source_bytes, api_route
 
 REPO = Path(__file__).resolve().parents[1]
 ROOT = str(REPO / "examples")
@@ -80,3 +80,18 @@ def test_estimate_rejects_non_numeric(tmp_path):
     store = _populated(tmp_path)
     status, payload = api_route(store, "/api/estimate", {"run": "r1", "sample": "abc"})
     assert status == 400
+
+
+def test_run_status_endpoint_for_unknown_job(tmp_path):
+    store = _populated(tmp_path)
+    status, payload = api_route(store, "/api/run_status", {"run": "ghost"})
+    assert status == 200 and payload["status"] == "unknown"
+
+
+def test_source_bytes_serves_only_known_docs(tmp_path):
+    store = _populated(tmp_path)
+    from ezpz.ui import data as D
+    doc_id = D.documents_in_run(store, "r1")[0]["doc_id"]
+    got = _source_bytes(store, "r1", doc_id)
+    assert got is not None and b"INVOICE" in got[0] and got[1]   # real bytes + a mime
+    assert _source_bytes(store, "r1", "not-a-doc") is None        # refuses unknown doc
