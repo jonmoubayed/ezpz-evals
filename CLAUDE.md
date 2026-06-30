@@ -47,9 +47,11 @@ QA/RAG later) and comparing tools/models on the same cohort.
 - `store/` — SQLite (`schema.sql`) + content-addressed blob store; **tables hold blob hashes, not bytes**.
 - `config/` — `ExperimentConfig` + YAML loader (the backbone; version experiment files).
 - `cli/` — init/validate/run/score/compare/view.  ·  `ui/` — local viewer: `server.py` (stdlib HTTP,
-  no deps) serves `static/index.html` (the SPA) over `data.py` view-models (read-only). The **one**
-  write path is `launch.py` (`POST /api/run`): the budget modal re-runs an experiment, budget-gated
-  (estimate → refuse if over cap → execute in a background thread), reconstructed from the stored run.
+  no deps) serves `static/index.html` (the SPA) over `data.py` view-models (read-only) — leaderboard
+  (+ per-field heatmap), documents, diff, failures, analyze (+ cost×accuracy Pareto); `/api/export`
+  downloads a run, URL-synced view state. The **one** write path is `launch.py` (`POST /api/run`):
+  the budget modal re-runs an experiment, budget-gated (estimate → refuse if over cap → background
+  thread, cooperatively cancellable via `POST /api/run/cancel`), reconstructed from the stored run.
 
 ## Conventions
 - Errors classified `transport|parse|refusal|timeout|unknown`; a failed extraction is `status=error`,

@@ -171,3 +171,23 @@ def test_estimate_scales_observed_cost_and_flags_cap(tmp_path):
     assert {r["name"] for r in est["rows"]}                  # one row per pipeline
     assert est["total"] >= 0.0 and "command" in est
     assert est["over"] == (est["total"] > 0.0)
+
+
+def test_field_breakdown_per_field_per_pipeline(tmp_path):
+    store, exp = _populated(tmp_path)
+    fb = D.field_breakdown(store, "r1")
+    assert {p["pipeline_id"] for p in fb["pipelines"]} == {p.config_hash for p in exp.pipelines}
+    accurate, flawed = exp.pipelines[0].config_hash, exp.pipelines[1].config_hash
+    by_field = {f["field"]: f for f in fb["fields"]}
+    # 'accurate' nails every field; 'flawed' is wrong on invoice_date
+    assert by_field["invoice_date"]["cells"][accurate] == 1.0
+    assert by_field["invoice_date"]["cells"][flawed] < 1.0
+
+
+def test_cost_accuracy_marks_pareto_frontier(tmp_path):
+    store, _ = _populated(tmp_path)
+    ca = D.cost_accuracy(store, "r1")
+    assert ca["points"] and all("cost_per_doc" in p and "accuracy" in p for p in ca["points"])
+    # the most accurate pipeline is always on the frontier
+    best = max(ca["points"], key=lambda p: p["accuracy"])
+    assert best["pareto"] is True

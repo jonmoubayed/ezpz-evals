@@ -95,6 +95,7 @@ const App = (() => {
     if (!run) { render(); return; }
     if (state.view === 'leaderboard') {
       data.leaderboard = await api('/api/leaderboard', { run, slice: state.slice });
+      data.fields = await api('/api/fields', { run });
     } else if (state.view === 'documents') {
       data.documents = await api('/api/documents', { run });
       const docs = data.documents.docs || [];
@@ -107,6 +108,7 @@ const App = (() => {
       data.failures = await api('/api/failures', { run });
     } else if (state.view === 'analyze') {
       data.analyze = await api('/api/analyze', { run });
+      data.cost = await api('/api/cost', { run });
     }
     // leaderboard rows power the budget modal; make sure they're available
     if (!data.leaderboard || data.leaderboard.run !== run)
@@ -142,6 +144,7 @@ const App = (() => {
         </div>
         <nav style="display:flex; gap:2px; margin-left:14px;">${nav}</nav>
         <div style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+          <a href="/api/export?run=${encodeURIComponent(r.id || '')}" title="download run JSON" style="display:flex; align-items:center; justify-content:center; background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:5px; width:30px; height:30px; font-size:13px; cursor:pointer; text-decoration:none;">⤓</a>
           <button onclick="App.openBudget()" style="display:flex; align-items:center; gap:6px; background:var(--acD); color:var(--acT); border:1px solid var(--acL); border-radius:5px; padding:6px 11px; font-size:11.5px; font-weight:600; cursor:pointer;"><span style="font-size:13px; line-height:1;">▸</span> run</button>
           <button onclick="App.toggleTheme()" title="toggle theme" style="background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:5px; width:30px; height:30px; font-size:13px; cursor:pointer;">${state.theme === 'dark' ? '☀' : '☾'}</button>
         </div>
@@ -273,6 +276,43 @@ const App = (() => {
           <span style="margin-left:auto; color:var(--fg4);">paired: ${esc(p.lead || '—')} ${esc(p.by || '')} → <span style="color:${p.significant ? v('cor') : v('mi')};">${esc(p.verdict || 'n/a')}</span></span>
         </div>
       </div>
+      ${fieldHeatmap()}
+    </div>`;
+  }
+
+  function accCellColor(a) { return a >= 0.9 ? v('cor') : a >= 0.75 ? v('mi') : v('wr'); }
+
+  function fieldHeatmap() {
+    const fb = data.fields;
+    if (!fb || !fb.fields || !fb.fields.length) return '';
+    const pipes = fb.pipelines;
+    const cols = `160px repeat(${pipes.length}, minmax(72px, 1fr))`;
+    const head = pipes.map(p => `<div style="padding:8px 6px; font-size:10px; color:var(--fg3); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-left:1px solid var(--line2);">${esc(p.label)}</div>`).join('');
+    const rows = fb.fields.map(f => {
+      const cells = pipes.map(p => {
+        const a = f.cells[p.pipeline_id];
+        if (a == null) return `<div style="padding:9px 6px; text-align:center; font-size:11px; color:var(--fg4); border-left:1px solid var(--line2);">—</div>`;
+        const c = accCellColor(a);
+        return `<div style="padding:9px 6px; text-align:center; font-size:11px; font-variant-numeric:tabular-nums; color:${a >= 0.75 ? 'var(--fg)' : v('wr')}; background:color-mix(in oklch, ${c} ${Math.round(18 + a * 18)}%, transparent); border-left:1px solid var(--line2);">${pct0(a)}%</div>`;
+      }).join('');
+      return `<div style="display:grid; grid-template-columns:${cols}; border-bottom:1px solid var(--line2);">
+        <div style="padding:9px 12px; min-width:0;"><span style="font-size:11px; color:var(--fg);">${esc(f.field)}</span> <span style="font-size:9px; color:var(--fg4);">${esc(f.type)}</span></div>
+        ${cells}
+      </div>`;
+    }).join('');
+    return `
+    <div style="margin-top:14px; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden;">
+      <div style="display:flex; align-items:baseline; gap:10px; padding:11px 14px; border-bottom:1px solid var(--line);">
+        <span style="font-size:12.5px; font-weight:600; color:var(--fg);">Per-field accuracy</span>
+        <span style="font-size:10.5px; color:var(--fg3);">where each pipeline wins or struggles · micro-accuracy per field</span>
+      </div>
+      <div style="overflow-x:auto;"><div style="min-width:${160 + pipes.length * 72}px;">
+        <div style="display:grid; grid-template-columns:${cols}; border-bottom:1px solid var(--line);">
+          <div style="padding:8px 12px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--fg3);">field</div>
+          ${head}
+        </div>
+        ${rows}
+      </div></div>
     </div>`;
   }
 
@@ -507,6 +547,54 @@ const App = (() => {
   }
 
   // ===================== ANALYZE =====================
+  function costScatter() {
+    const pts = (data.cost && data.cost.points) || [];
+    if (!pts.length) return '';
+    const W = 560, H = 300, padL = 50, padR = 120, padT = 16, padB = 36;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const maxCost = Math.max(...pts.map(p => p.cost_per_doc), 0);
+    const xMax = maxCost > 0 ? maxCost * 1.15 : 1;
+    const accs = pts.map(p => p.accuracy);
+    let yMin = Math.max(0, Math.min(...accs) - 0.05), yMax = Math.min(1, Math.max(...accs) + 0.03);
+    if (yMax - yMin < 0.05) { yMin = Math.max(0, yMin - 0.05); yMax = Math.min(1, yMax + 0.05); }
+    const X = c => padL + (xMax ? c / xMax : 0) * plotW;
+    const Y = a => padT + (1 - (a - yMin) / (yMax - yMin)) * plotH;
+
+    // axes + a few ticks
+    const yticks = [yMin, (yMin + yMax) / 2, yMax].map(t =>
+      `<line x1="${padL}" y1="${Y(t).toFixed(1)}" x2="${padL + plotW}" y2="${Y(t).toFixed(1)}" stroke="var(--line2)" stroke-width="1"/>` +
+      `<text x="${padL - 6}" y="${(Y(t) + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--fg4)">${pct0(t)}%</text>`).join('');
+    const xticks = [0, xMax / 2, xMax].map(t =>
+      `<text x="${X(t).toFixed(1)}" y="${H - padB + 16}" text-anchor="middle" font-size="9" fill="var(--fg4)">$${t.toFixed(3)}</text>`).join('');
+
+    const frontier = pts.filter(p => p.pareto).sort((a, b) => a.cost_per_doc - b.cost_per_doc);
+    const fline = frontier.length > 1
+      ? `<polyline points="${frontier.map(p => `${X(p.cost_per_doc).toFixed(1)},${Y(p.accuracy).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--cor)" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.7"/>`
+      : '';
+    const dots = pts.map(p => {
+      const cx = X(p.cost_per_doc), cy = Y(p.accuracy);
+      const col = p.pareto ? v('cor') : v('ac');
+      return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${p.pareto ? 6 : 4.5}" fill="${col}" fill-opacity="${p.pareto ? 0.9 : 0.5}" stroke="${col}" stroke-width="1.5"/>` +
+        `<text x="${(cx + 9).toFixed(1)}" y="${(cy + 3).toFixed(1)}" font-size="9.5" fill="var(--fg2)">${esc(p.label)}${p.pareto ? ' ★' : ''}</text>`;
+    }).join('');
+
+    return `
+    <div style="margin-bottom:16px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:2px;">
+        <span style="font-size:13px; font-weight:600; color:var(--fg);">Cost vs accuracy</span>
+        <span style="font-size:10.5px; color:var(--fg3);"><span style="color:var(--cor);">★</span> Pareto frontier — most accuracy per dollar</span>
+      </div>
+      <p style="margin:0 0 8px; font-size:11px; color:var(--fg3);">each point is a pipeline; a starred point is one no other beats on both cost and accuracy</p>
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px; font-family:inherit;">
+        <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="var(--line)" stroke-width="1"/>
+        <line x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${padT + plotH}" stroke="var(--line)" stroke-width="1"/>
+        ${yticks}${xticks}${fline}${dots}
+        <text x="${padL + plotW / 2}" y="${H - 2}" text-anchor="middle" font-size="9.5" fill="var(--fg3)">cost / doc ($)</text>
+        <text x="12" y="${padT + plotH / 2}" text-anchor="middle" font-size="9.5" fill="var(--fg3)" transform="rotate(-90 12 ${padT + plotH / 2})">accuracy</text>
+      </svg>
+    </div>`;
+  }
+
   function analyzeView() {
     const a = data.analyze;
     if (!a) return emptyPanel('loading…');
@@ -550,7 +638,8 @@ const App = (() => {
 
     return `
     <div>
-      <div style="margin-bottom:16px;"><h1 style="margin:0; font-size:17px; font-weight:600; color:var(--fg);">Analyze</h1><p style="margin:4px 0 0; font-size:11.5px; color:var(--fg3);">calibration · paired comparison · extraction-strategy diagnostics</p></div>
+      <div style="margin-bottom:16px;"><h1 style="margin:0; font-size:17px; font-weight:600; color:var(--fg);">Analyze</h1><p style="margin:4px 0 0; font-size:11.5px; color:var(--fg3);">cost vs accuracy · calibration · paired comparison · extraction-strategy diagnostics</p></div>
+      ${costScatter()}
       <div style="display:grid; grid-template-columns:1.3fr 1fr; gap:16px; align-items:start;">
         <div style="background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px;">
           <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px;"><span style="font-size:13px; font-weight:600; color:var(--fg);">Confidence calibration</span><span style="font-size:10.5px; color:var(--fg3);">${a.nConf} preds w/ confidence</span></div>
@@ -590,7 +679,10 @@ const App = (() => {
     const map = {
       starting: [v('ac'), v('acD'), '⟳', 'launching…'],
       running: [v('ac'), v('acD'), '⟳', `running ${(j.run_id || '').slice(0, 7)}… ${j.uncached_cells != null ? '· ' + j.uncached_cells + ' uncached cells' : ''}`],
+      cancelling: [v('mi'), v('miD'), '⟳', 'cancelling — finishing the in-flight cell…'],
       complete: [v('cor'), v('corD'), '✓', `run ${(j.run_id || '').slice(0, 7)} complete — switching…`],
+      cancelled: [v('mi'), v('miD'), '◼', `run ${(j.run_id || '').slice(0, 7)} cancelled — partial results kept`],
+      busy: [v('mi'), v('miD'), '⏳', j.error || 'a run is already in progress'],
       refused: [v('wr'), v('wrD'), '✗', 'refused: ' + (j.error || 'over budget')],
       failed: [v('wr'), v('wrD'), '✗', 'failed: ' + (j.error || 'unknown')],
       error: [v('wr'), v('wrD'), '✗', j.error || 'error'],
@@ -608,7 +700,7 @@ const App = (() => {
       <span style="text-align:right; font-variant-numeric:tabular-nums; color:${r.est > state.budgetCap ? v('wr') : v('fg2')};">$${r.est.toFixed(2)}</span>
     </div>`).join('') || emptyRow('this run recorded no cost (e.g. the fake adapter)');
     const over = bd.over;
-    const running = !!state.runJob && ['starting', 'running'].includes(state.runJob.status);
+    const running = !!state.runJob && ['starting', 'running', 'cancelling'].includes(state.runJob.status);
     const cmd = `ezpz run <experiment.yaml> --sample ${state.sampleN} --budget-usd ${state.budgetCap}`;
     return `
       <code style="display:block; font-size:11px; color:var(--fg2); background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:9px 11px; margin-bottom:16px;"><span style="color:var(--ac);">ezpz</span> run &lt;experiment.yaml&gt; --sample ${state.sampleN} --budget-usd ${state.budgetCap}</code>
@@ -626,7 +718,9 @@ const App = (() => {
         <div style="display:flex; gap:8px;">
           <button onclick="App.closeBudget()" style="background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:5px; padding:8px 14px; font-size:11.5px; cursor:pointer;">cancel</button>
           <button onclick="App.copyCommand('${esc(cmd)}')" style="background:var(--panel2); color:var(--fg2); border:1px solid var(--line); border-radius:5px; padding:8px 14px; font-size:11.5px; cursor:pointer;" id="copyBtn">copy command</button>
-          <button onclick="App.confirmRun()" ${running || over ? 'disabled' : ''} style="background:${over || running ? v('panel2') : v('ac')}; color:${over || running ? v('fg4') : '#fff'}; border:1px solid ${over || running ? v('line') : v('ac')}; border-radius:5px; padding:8px 16px; font-size:11.5px; font-weight:600; cursor:${over || running ? 'not-allowed' : 'pointer'};">${running ? 'running…' : 'confirm & run'}</button>
+          ${running
+            ? `<button onclick="App.cancelRun()" style="background:var(--wrD); color:var(--wr); border:1px solid var(--wr); border-radius:5px; padding:8px 16px; font-size:11.5px; font-weight:600; cursor:pointer;">cancel run</button>`
+            : `<button onclick="App.confirmRun()" ${over ? 'disabled' : ''} style="background:${over ? v('panel2') : v('ac')}; color:${over ? v('fg4') : '#fff'}; border:1px solid ${over ? v('line') : v('ac')}; border-radius:5px; padding:8px 16px; font-size:11.5px; font-weight:600; cursor:${over ? 'not-allowed' : 'pointer'};">confirm & run</button>`}
         </div>
       </div>`;
   }
@@ -669,6 +763,20 @@ const App = (() => {
   function render() {
     document.getElementById('root').innerHTML =
       topbar() + cliBar() + `<div style="max-width:1280px; margin:0 auto; padding:22px;">` + viewBody() + `</div>` + budgetModal();
+    syncURL();
+  }
+
+  function syncURL() {
+    // keep view state in the URL so refresh restores it and links are shareable
+    const q = new URLSearchParams();
+    q.set('view', state.view);
+    if (state.runId) q.set('run', state.runId);
+    if (state.theme !== 'dark') q.set('theme', state.theme);
+    if (state.view === 'leaderboard' && state.slice !== 'all') q.set('slice', state.slice);
+    if (state.view === 'documents' && state.selectedDoc) q.set('doc', state.selectedDoc);
+    if (state.view === 'failures' && state.failCase !== 'all') q.set('fail', state.failCase);
+    if (state.view === 'diff' && state.diffFilter !== 'all') q.set('diff', state.diffFilter);
+    history.replaceState(null, '', location.pathname + '?' + q.toString());
   }
 
   // ---- public handlers ----
@@ -679,6 +787,10 @@ const App = (() => {
       if (views.includes(q.get('view'))) state.view = q.get('view');
       if (['dark', 'light'].includes(q.get('theme'))) state.theme = q.get('theme');
       if (q.get('run')) state.runId = q.get('run');
+      if (q.get('slice')) state.slice = q.get('slice');
+      if (q.get('doc')) state.selectedDoc = q.get('doc');
+      if (q.get('fail')) state.failCase = q.get('fail');
+      if (q.get('diff')) state.diffFilter = q.get('diff');
       if (q.get('budget') === '1') state.budgetOpen = true;
       applyTheme(); render(); await loadState(); await loadView();
     },
@@ -710,6 +822,18 @@ const App = (() => {
       patchBudget();
       if (state.runJob.status === 'running') pollRun(state.runJob.run_id);
     },
+    async cancelRun() {
+      const id = state.runJob && state.runJob.run_id;
+      if (!id) return;
+      try {
+        await fetch('/api/run/cancel', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run: id }),
+        });
+        state.runJob = { ...state.runJob, status: 'cancelling' };
+      } catch (e) { /* poll will reconcile */ }
+      patchBudget();
+    },
     onSample(val) { state.sampleN = +val; patchBudget(); },
     onCap(val) { state.budgetCap = +val; patchBudget(); },
     copyCommand(cmd) {
@@ -732,12 +856,12 @@ const App = (() => {
       try { j = await (await fetch('/api/run_status?run=' + encodeURIComponent(runId))).json(); }
       catch (e) { state.runJob = { status: 'error', error: String(e) }; patchBudget(); return; }
       state.runJob = j;
-      if (j.status === 'running' || j.status === 'starting') { patchBudget(); setTimeout(tick, 1000); return; }
+      if (['running', 'starting', 'cancelling'].includes(j.status)) { patchBudget(); setTimeout(tick, 1000); return; }
       patchBudget();
-      if (j.status === 'complete') {
+      if (j.status === 'complete' || j.status === 'cancelled') {
         await loadState();                      // pick up the new run in the switcher
         state.runId = runId; state.selectedDoc = null; state.diffBase = null;
-        setTimeout(() => { state.budgetOpen = false; state.runJob = null; render(); loadView(); }, 700);
+        setTimeout(() => { state.budgetOpen = false; state.runJob = null; render(); loadView(); }, j.status === 'cancelled' ? 1100 : 700);
       }
     };
     setTimeout(tick, 800);

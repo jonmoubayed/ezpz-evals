@@ -30,6 +30,7 @@ from ezpz.store.sqlite import SqliteStore
 
 # new_run_id -> {status, run_id, source, ...}. Shared across handler threads (module-level).
 _JOBS: dict[str, dict] = {}
+_CANCELS: dict[str, threading.Event] = {}   # run_id -> cooperative-cancel flag
 _LOCK = threading.Lock()
 
 
@@ -43,11 +44,28 @@ def job_status(run_id: str) -> dict:
         return dict(job) if job else {"status": "unknown", "run_id": run_id}
 
 
+def cancel(run_id: str) -> dict:
+    """Request cooperative cancellation; the run stops after the in-flight cell (kept)."""
+    with _LOCK:
+        ev = _CANCELS.get(run_id)
+        if ev is None or _JOBS.get(run_id, {}).get("status") not in ("running", "starting"):
+            return {"status": _JOBS.get(run_id, {}).get("status", "unknown"), "run_id": run_id}
+        ev.set()
+        _JOBS[run_id]["status"] = "cancelling"
+        return dict(_JOBS[run_id])
+
+
 def launch(db_path: str, root: str, source_run_id: str, sample: int, cap: float) -> dict:
     """Validate + budget-check synchronously; on success spawn the run and return its new id.
 
     Returns a job dict: status is one of refused | error | running (then complete | failed via
     job_status). Never raises for the expected failure modes — the UI shows the message."""
+    with _LOCK:  # one run at a time — this is a local single-user tool
+        if any(j["status"] in ("running", "starting", "cancelling") for j in _JOBS.values()):
+            busy = next(j for j in _JOBS.values() if j["status"] in ("running", "starting", "cancelling"))
+            return {"status": "busy", "error": f"a run is already in progress ({busy['run_id'][:7]})",
+                    "run_id": busy["run_id"]}
+
     store = SqliteStore(db_path)
     store.init_db()
     try:
@@ -85,6 +103,7 @@ def launch(db_path: str, root: str, source_run_id: str, sample: int, cap: float)
             "estimate_usd": est["estimate_usd"],
         }
 
+    cancel_ev = threading.Event()
     job = {
         "status": "running", "run_id": new_run.run_id, "source": source_run_id,
         "estimate_usd": est["estimate_usd"], "uncached_cells": est["uncached_cells"],
@@ -92,17 +111,19 @@ def launch(db_path: str, root: str, source_run_id: str, sample: int, cap: float)
     }
     with _LOCK:
         _JOBS[new_run.run_id] = job
+        _CANCELS[new_run.run_id] = cancel_ev
 
     def worker() -> None:
         try:
-            Executor(store, cache, cap).run(new_run, dataset, task, pipelines, src.scorers)
+            Executor(store, cache, cap).run(
+                new_run, dataset, task, pipelines, src.scorers, should_stop=cancel_ev.is_set)
             results = store.load_results(new_run.run_id)
             summary = pipeline_summary(store.load_scores(new_run.run_id), results)
             errors = sum(1 for r in results if r.status is ResultStatus.ERROR)
             with _LOCK:
                 _JOBS[new_run.run_id].update(
-                    status="complete", errors=errors,
-                    pipelines=len(summary), finished_at=_now(),
+                    status="cancelled" if cancel_ev.is_set() else "complete",
+                    errors=errors, pipelines=len(summary), finished_at=_now(),
                 )
         except Exception as e:  # surface, never crash the server thread
             with _LOCK:
