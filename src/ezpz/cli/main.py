@@ -356,14 +356,15 @@ def view(
     host: str = typer.Option("127.0.0.1", help="bind address"),
     no_browser: bool = typer.Option(False, "--no-browser", help="don't auto-open a browser"),
 ):
-    """Launch the local viewer — a stdlib web server (no extra deps) that reads SQLite and never
-    re-runs. Serves the SPA + a read-only JSON API; the budget modal only estimates."""
+    """Launch the local viewer — a stdlib web server (no extra deps). Serves the SPA + a read-only
+    JSON API over SQLite; the budget modal can also launch a budget-gated re-run (datasets/tasks
+    resolve from the current directory)."""
     from ezpz.ui.server import serve
 
     db_path = str(Path(db).resolve())
     if not Path(db_path).exists():
         rprint(f"[yellow]no DB at {db_path}[/yellow] — run [bold]ezpz run <experiment>[/bold] first.")
-    serve(db_path, host=host, port=port, open_browser=not no_browser)
+    serve(db_path, host=host, port=port, open_browser=not no_browser, root=str(Path.cwd()))
 
 
 _SCAFFOLD: dict[str, str] = {

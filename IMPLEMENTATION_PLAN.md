@@ -458,17 +458,21 @@ Each spec follows the same template: **Responsibility / Interface / Key decision
 
 ### 6.15 `ui/` — local web viewer (stdlib server + static SPA)
 
-- **Responsibility:** Read SQLite (never re-run) and present five views: **leaderboard**
+- **Responsibility:** Read SQLite for all views (the only write path is the budget modal's
+  budget-gated re-run) and present five views: **leaderboard**
   (pipelines×metrics, slice toggles, CI whiskers, paired-compare verdict), **per-document
   drill-down** (columns per pipeline of predicted vs GT, color-coded correct/wrong/missing/
   hallucinated, confidence + provenance where available, rendered source alongside), **run diff**
-  (which fields/docs improved or regressed), a **failure explorer**, and **analyze** (confidence
-  calibration · paired comparison · strategy-flag rates). A budget modal estimates a run's cost
-  from observed $/doc (estimate-only — it never launches a run).
-- **Structure:** `ui/data.py` holds framework-free view-models (pure functions over `SqliteStore`);
-  `ui/server.py` is a stdlib `http.server` exposing a socket-free, unit-testable
-  `api_route(store, path, query)` plus static-file serving; `ui/static/index.html` is the SPA
-  (a faithful port of the `claude.ai/design` mockup) that consumes the JSON API.
+  (which fields/docs improved or regressed, with a base-run picker), a **failure explorer**, and
+  **analyze** (confidence calibration · paired comparison · strategy-flag rates). A budget modal
+  estimates a run's cost from observed $/doc and can **launch a budget-gated re-run** of the
+  experiment (the one write path).
+- **Structure:** `ui/data.py` holds framework-free read view-models (pure functions over
+  `SqliteStore`); `ui/server.py` is a stdlib `http.server` exposing a socket-free, unit-testable
+  `api_route(store, path, query)` + static/source serving + `POST /api/run`; `ui/launch.py`
+  reconstructs the experiment from the stored run and executes it in a background thread (estimate →
+  refuse if over cap → run); `ui/static/index.html` is the SPA (a faithful port of the
+  `claude.ai/design` mockup) that consumes the JSON API and polls run status.
 - **Key decisions:** **stdlib only — no web framework, no extra deps** (the design is hand-authored
   HTML/CSS/JS that Streamlit could not render faithfully; the framework-free data layer made the
   swap clean). Because the UI only reads SQLite, the presentation layer can be swapped without

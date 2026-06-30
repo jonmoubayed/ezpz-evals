@@ -291,6 +291,7 @@ def drilldown(store: SqliteStore, run_id: str, doc_id: str) -> dict:
     ]
     rows = []
     fail_n = 0
+    pages = 1  # real page count = max provenance page seen (stays 1 when no adapter emits pages)
     for field in task.fields:
         labeled = field.name in gt_fields
         gt_kind = "not_labeled"
@@ -306,11 +307,14 @@ def drilldown(store: SqliteStore, run_id: str, doc_id: str) -> dict:
             if status in ("wrong", "missing", "hallucinated", "parse_error"):
                 fail_n += 1
             conf = getattr(fv, "confidence", None) if fv else None
+            prov = _provenance(fv)
+            if prov and prov.get("page"):
+                pages = max(pages, int(prov["page"]))
             cells[pid] = {
                 "value": _display(fv.value if fv else None),
                 "status": status,
                 "confidence": round(conf, 3) if conf is not None else None,
-                "provenance": _provenance(fv),
+                "provenance": prov,
             }
         rows.append({
             "field": field.name, "type": field.type.value,
@@ -321,12 +325,15 @@ def drilldown(store: SqliteStore, run_id: str, doc_id: str) -> dict:
 
     doc_passes = [1.0 if s.passed else 0.0 for s in scores]
     accuracy = round(sum(doc_passes) / len(doc_passes), 4) if doc_passes else 0.0
+    mime = (doc.mime if doc else None) or ""
     return {
         "doc": {
             "doc_id": doc_id, "slug": (doc.slug if doc else None) or doc_id[:12],
             "source_text": _source_text(doc), "accuracy": accuracy,
             "summary": f"{fail_n} failing fields · {accuracy * 100:.0f}% accurate",
             "tags": doc.tags if doc else [],
+            "pages": pages, "mime": mime,
+            "is_image": mime.startswith("image/"),
         },
         "pipelines": pipelines,
         "fields": rows,
@@ -365,13 +372,28 @@ def run_diff(store: SqliteStore, run_a: str, run_b: str) -> dict:
     }
 
 
+def _score_case(s: FieldScore) -> str:
+    """A single field-score's case in the UI vocabulary (correct/wrong/missing/...)."""
+    if s.passed:
+        return "correct"
+    return _CASE_NORM.get(s.detail.get("case", ""), "wrong")
+
+
 def diff_view(store: SqliteStore, run_a: str, run_b: str) -> dict:
-    """Run-diff view-model for the SPA: labelled change rows + improved/regressed/net counts."""
+    """Run-diff view-model for the SPA: labelled change rows + improved/regressed/net counts.
+    Each row carries the *actual* score case on both sides (e.g. hallucinated → correct)."""
     run = store.load_run(run_a)
     base = store.load_run(run_b)
     raw = run_diff(store, run_a, run_b)
     labels = {pc.config_hash: _label(pc) for pc in run.pipelines}
     docs = store.load_documents([f["doc_id"] for f in raw["improvements"] + raw["regressions"]])
+
+    # case lookups keyed by (pipeline, doc, field, scorer) so a flip shows its real before/after
+    def case_index(scores: list[FieldScore]) -> dict[tuple, str]:
+        return {(s.pipeline_id, s.doc_id, s.field, s.scorer): _score_case(s) for s in scores}
+
+    a_case = case_index(store.load_scores(run_a))
+    b_case = case_index(store.load_scores(run_b))
 
     def slug(doc_id: str) -> str:
         d = docs.get(doc_id)
@@ -380,12 +402,13 @@ def diff_view(store: SqliteStore, run_a: str, run_b: str) -> dict:
     rows = []
     for direction, flips in (("improved", raw["improvements"]), ("regressed", raw["regressions"])):
         for f in flips:
+            key = (f["pipeline_id"], f["doc_id"], f["field"], f["scorer"])
             rows.append({
                 "doc": slug(f["doc_id"]), "field": f["field"],
                 "pipe": labels.get(f["pipeline_id"], f["pipeline_id"][:8]),
                 "dir": direction,
-                "from_case": "wrong" if direction == "improved" else "correct",
-                "to_case": "correct" if direction == "improved" else "wrong",
+                "from_case": b_case.get(key, "wrong" if direction == "improved" else "correct"),
+                "to_case": a_case.get(key, "correct" if direction == "improved" else "wrong"),
             })
     rows.sort(key=lambda r: (r["dir"] != "regressed", r["doc"], r["field"]))
     improved, regressed = len(raw["improvements"]), len(raw["regressions"])
