@@ -100,8 +100,12 @@ class Executor:
         self.backoff = backoff
         self.circuit_threshold = circuit_threshold
 
-    def run(self, run: Run, dataset: Dataset, task: Task, pipelines, scorers) -> str:
-        """Execute the grid; persist results+scores+GT+documents; return run_id."""
+    def run(self, run: Run, dataset: Dataset, task: Task, pipelines, scorers,
+            should_stop=None) -> str:
+        """Execute the grid; persist results+scores+GT+documents; return run_id.
+
+        `should_stop` is an optional zero-arg predicate checked between cells (like the budget
+        guard) so a caller can cancel a long run cooperatively; already-done cells are kept."""
         self.store.save_run(run)
         self.store.save_task(task)
         schema_hash = task.schema_hash()
@@ -128,9 +132,10 @@ class Executor:
 
         concurrency = max(1, run.options.concurrency or 1)
         if concurrency <= 1:
-            self._run_serial(run, task, schema_hash, gts, scorers, cells, guard)
+            self._run_serial(run, task, schema_hash, gts, scorers, cells, guard, should_stop)
         else:
-            self._run_concurrent(run, task, schema_hash, gts, scorers, cells, guard, concurrency)
+            self._run_concurrent(
+                run, task, schema_hash, gts, scorers, cells, guard, concurrency, should_stop)
 
         self.store.finish_run(run.run_id, RunStatus.COMPLETE, _now())
         return run.run_id
@@ -139,12 +144,12 @@ class Executor:
         self.store.save_result(run_id, result)
         self.store.save_scores(run_id, scores)
 
-    def _run_serial(self, run, task, schema_hash, gts, scorers, cells, guard) -> None:
+    def _run_serial(self, run, task, schema_hash, gts, scorers, cells, guard, should_stop=None) -> None:
         consecutive: dict[str, int] = defaultdict(int)
         for doc, pipeline in cells:
             pid = pipeline.pipeline_id
-            if guard.over:
-                break  # budget stop-early
+            if guard.over or (should_stop and should_stop()):
+                break  # budget stop-early, or cooperative cancel
             if consecutive[pid] >= self.circuit_threshold:
                 self._save(run.run_id, _circuit_result(doc.doc_id, pid), [])
                 continue
@@ -158,7 +163,8 @@ class Executor:
                 consecutive[pid] = 0
                 guard.add(result.cost.usd if result.cost else None)
 
-    def _run_concurrent(self, run, task, schema_hash, gts, scorers, cells, guard, concurrency) -> None:
+    def _run_concurrent(self, run, task, schema_hash, gts, scorers, cells, guard, concurrency,
+                        should_stop=None) -> None:
         lock = threading.Lock()
         adapters = {p.config.adapter for _, p in cells}
         sems = {a: threading.Semaphore(concurrency) for a in adapters}
@@ -168,7 +174,7 @@ class Executor:
         def work(doc, pipeline):
             pid = pipeline.pipeline_id
             with lock:
-                if state["stop"]:
+                if state["stop"] or (should_stop and should_stop()):
                     return None
                 if consecutive[pid] >= self.circuit_threshold:
                     return _circuit_result(doc.doc_id, pid), []

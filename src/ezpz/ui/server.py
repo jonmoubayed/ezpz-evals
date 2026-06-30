@@ -90,6 +90,12 @@ def api_route(store: SqliteStore, path: str, query: dict[str, str]) -> tuple[int
     if path == "/api/analyze":
         return 200, {"run": run_id, **D.analyze(store, run_id)}
 
+    if path == "/api/fields":
+        return 200, {"run": run_id, **D.field_breakdown(store, run_id)}
+
+    if path == "/api/cost":
+        return 200, {"run": run_id, **D.cost_accuracy(store, run_id)}
+
     if path == "/api/estimate":
         try:
             sample = int(query.get("sample", "10"))
@@ -148,6 +154,20 @@ def _make_handler(db_path: str, root: str) -> type[BaseHTTPRequestHandler]:
                 else:
                     self._send(200, got[0], got[1])
                 return
+            if path == "/api/export":
+                store = self._store()
+                run_id = _default_run(store, query.get("run"))
+                if run_id is None:
+                    self._json(404, {"error": "no runs"})
+                    return
+                body = json.dumps(store.export(run_id), indent=2, default=str).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Disposition", f'attachment; filename="ezpz-{run_id}.json"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if path.startswith("/api/"):
                 status, payload = api_route(self._store(), path, query)
                 self._json(status, payload)
@@ -175,6 +195,12 @@ def _make_handler(db_path: str, root: str) -> type[BaseHTTPRequestHandler]:
                     return
                 job = L.launch(db_path, root, run, sample, cap)
                 self._json(200 if job.get("status") in ("running",) else 409, job)
+                return
+            if parsed.path == "/api/run/cancel":
+                if not body.get("run"):
+                    self._json(400, {"error": "missing 'run'"})
+                    return
+                self._json(200, L.cancel(body["run"]))
                 return
             self._json(404, {"error": f"unknown endpoint {parsed.path}"})
 

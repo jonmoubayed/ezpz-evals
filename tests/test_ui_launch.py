@@ -3,6 +3,7 @@
 Exercises `ezpz.ui.launch.launch` end-to-end (reconstruct experiment from the stored run → execute
 in a background thread) plus its refusal/error guards. The `fake` adapter keeps it network-free.
 """
+import threading
 import time
 from pathlib import Path
 
@@ -80,3 +81,41 @@ def test_launch_errors_clearly_on_unknown_run_and_unresolvable_root(tmp_path):
     bad_root = str(tmp_path / "not-an-eval-project")
     job = L.launch(db, bad_root, "r1", sample=1, cap=10.0)
     assert job["status"] == "error" and "resolve" in job["error"]
+
+
+def test_launch_refuses_a_second_concurrent_run(tmp_path):
+    db, _ = _populated(tmp_path)
+    L._JOBS["inflight"] = {"status": "running", "run_id": "inflight"}  # simulate a run in progress
+    try:
+        job = L.launch(db, ROOT, "r1", sample=1, cap=10.0)
+        assert job["status"] == "busy"
+    finally:
+        L._JOBS.pop("inflight", None)
+
+
+def test_cancel_sets_the_event_and_marks_cancelling(tmp_path):
+    ev = threading.Event()
+    L._JOBS["jx"] = {"status": "running", "run_id": "jx"}
+    L._CANCELS["jx"] = ev
+    try:
+        out = L.cancel("jx")
+        assert out["status"] == "cancelling" and ev.is_set()
+        assert L.cancel("ghost")["status"] == "unknown"   # cancelling an unknown job is a no-op
+    finally:
+        L._JOBS.pop("jx", None)
+        L._CANCELS.pop("jx", None)
+
+
+def test_executor_should_stop_halts_cooperatively(tmp_path):
+    db = str(tmp_path / "stop.sqlite")
+    store = SqliteStore(db)
+    store.init_db()
+    cache = RawResponseCache(store, BlobStore(str(tmp_path / "stopblobs")))
+    exp = ExperimentConfig.load_yaml(str(REPO / "examples" / "experiments" / "fake_invoice_smoke.yaml"))
+    dataset = resolve_dataset(ROOT, exp.dataset)
+    task = resolve_task(ROOT, exp.task)
+    pipelines = [get_adapter(p.adapter)(p) for p in exp.pipelines]
+    run = Run(run_id="stop", dataset_ref=exp.dataset, task_ref=exp.task, pipelines=exp.pipelines,
+              scorers=exp.scorers, options=exp.options, status=RunStatus.RUNNING)
+    Executor(store, cache).run(run, dataset, task, pipelines, exp.scorers, should_stop=lambda: True)
+    assert store.load_results("stop") == []   # cancelled before any cell ran
