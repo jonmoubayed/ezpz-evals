@@ -1,13 +1,12 @@
 """Local viewer server — Python stdlib only (no web framework, no extra deps).
 
-`ezpz view` launches this: it serves the static SPA (ui/static/index.html) and a small read-only
-JSON API. All read logic lives in the framework-free `ezpz.ui.data`; this module is just routing.
+`ezpz view` launches this: it serves the static SPA (ui/static/index.html), a small JSON API, and
+the raw source files behind the drill-down. All *read* logic lives in the framework-free
+`ezpz.ui.data`; launching a run lives in `ezpz.ui.launch`.
 
-`api_route` is a pure function (store, path, query) -> (status, payload) so the whole API surface is
-unit-testable without binding a socket. The HTTP layer is a thin shell over it.
-
-Read-only invariant: every endpoint reads SQLite only. `/api/estimate` derives a cost projection
-from a cached run's observed cost/doc — it never launches a run or calls a provider.
+`api_route` is a pure function (store, path, query) -> (status, payload) so the read API is
+unit-testable without binding a socket. Reads touch SQLite only. The single write path is
+POST /api/run (re-run an experiment, budget-gated) — see `launch`.
 """
 from __future__ import annotations
 
@@ -21,8 +20,11 @@ from urllib.parse import parse_qs, urlparse
 
 from ezpz.store.sqlite import SqliteStore
 from ezpz.ui import data as D
+from ezpz.ui import launch as L
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+_IMAGE_MIME = ("image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp")
 
 
 def _default_run(store: SqliteStore, requested: Optional[str]) -> Optional[str]:
@@ -51,11 +53,13 @@ def _default_base(store: SqliteStore, run_id: str, requested: Optional[str]) -> 
 
 
 def api_route(store: SqliteStore, path: str, query: dict[str, str]) -> tuple[int, dict]:
-    """Resolve one API request to (http_status, json_payload). Pure + socket-free for testing."""
+    """Resolve one GET API request to (http_status, json_payload). Pure + socket-free for testing."""
     run_id = _default_run(store, query.get("run"))
     if path == "/api/state":
-        runs = D.run_menu(store)
-        return 200, {"runs": runs, "current": run_id}
+        return 200, {"runs": D.run_menu(store), "current": run_id}
+
+    if path == "/api/run_status":
+        return 200, L.job_status(query.get("run", ""))
 
     if run_id is None:
         return 404, {"error": "no runs found — run `ezpz run <experiment>` first"}
@@ -97,7 +101,22 @@ def api_route(store: SqliteStore, path: str, query: dict[str, str]) -> tuple[int
     return 404, {"error": f"unknown endpoint {path}"}
 
 
-def _make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
+def _source_bytes(store: SqliteStore, run_id: str, doc_id: str) -> tuple[bytes, str] | None:
+    """Raw bytes + content-type for a document's source file, or None. Serves only the exact
+    source_path the store recorded for a doc in this run (no arbitrary path access)."""
+    if doc_id not in {r.doc_id for r in store.load_results(run_id)}:
+        return None
+    doc = store.load_documents([doc_id]).get(doc_id)
+    if not doc or not doc.source_path:
+        return None
+    path = Path(doc.source_path)
+    if not path.is_file():
+        return None
+    mime = doc.mime or "application/octet-stream"
+    return path.read_bytes(), mime
+
+
+def _make_handler(db_path: str, root: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet; the CLI prints the URL itself
             pass
@@ -110,17 +129,54 @@ def _make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def _json(self, status: int, payload: dict) -> None:
+            self._send(status, json.dumps(payload, default=str).encode(), "application/json")
+
+        def _store(self) -> SqliteStore:
+            store = SqliteStore(db_path)
+            store.init_db()
+            return store
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
+            query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            if path == "/api/source":
+                got = _source_bytes(self._store(), query.get("run", ""), query.get("doc", ""))
+                if got is None:
+                    self._send(404, b"not found", "text/plain")
+                else:
+                    self._send(200, got[0], got[1])
+                return
             if path.startswith("/api/"):
-                query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-                store = SqliteStore(db_path)
-                store.init_db()
-                status, payload = api_route(store, path, query)
-                self._send(status, json.dumps(payload, default=str).encode(), "application/json")
+                status, payload = api_route(self._store(), path, query)
+                self._json(status, payload)
                 return
             self._serve_static(path)
+
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except json.JSONDecodeError:
+                self._json(400, {"error": "invalid JSON body"})
+                return
+            if parsed.path == "/api/run":
+                run = body.get("run")
+                try:
+                    sample = int(body.get("sample", 0))
+                    cap = float(body.get("cap", 0))
+                except (TypeError, ValueError):
+                    self._json(400, {"error": "sample/cap must be numeric"})
+                    return
+                if not run:
+                    self._json(400, {"error": "missing 'run'"})
+                    return
+                job = L.launch(db_path, root, run, sample, cap)
+                self._json(200 if job.get("status") in ("running",) else 409, job)
+                return
+            self._json(404, {"error": f"unknown endpoint {parsed.path}"})
 
         def _serve_static(self, path: str) -> None:
             rel = "index.html" if path in ("/", "") else path.lstrip("/")
@@ -137,13 +193,20 @@ def _make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(db_path: str, host: str = "127.0.0.1", port: int = 8501, open_browser: bool = True) -> None:
-    """Blocking: start the viewer server and (optionally) open a browser at it."""
-    httpd = ThreadingHTTPServer((host, port), _make_handler(db_path))
+def serve(
+    db_path: str, host: str = "127.0.0.1", port: int = 8501,
+    open_browser: bool = True, root: Optional[str] = None,
+) -> None:
+    """Blocking: start the viewer server and (optionally) open a browser at it.
+
+    `root` is the eval project directory (datasets/ + tasks/) used to launch re-runs; defaults to
+    the current working directory."""
+    project_root = root or str(Path.cwd())
+    httpd = ThreadingHTTPServer((host, port), _make_handler(db_path, project_root))
     url = f"http://{host}:{port}/"
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
-    print(f"ezpz viewer → {url}  (reads {db_path} · Ctrl-C to stop)")
+    print(f"ezpz viewer → {url}  (reads {db_path} · runs resolve from {project_root} · Ctrl-C)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

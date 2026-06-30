@@ -126,8 +126,23 @@ def test_drilldown_adds_confidence_provenance_and_doc_accuracy(tmp_path):
     cell = view["fields"][0]["cells"][accurate]
     assert "confidence" in cell and "provenance" in cell    # fake adapter emits confidence
     assert cell["confidence"] is not None
+    assert cell["provenance"] and cell["provenance"]["text_span"]  # emit_provenance: true in example
     assert "accuracy" in view["doc"] and "failing fields" in view["doc"]["summary"]
-    assert any(p["cap"] for p in view["pipelines"])         # capability tag inferred
+    assert view["doc"]["pages"] >= 1 and "is_image" in view["doc"]  # source-panel metadata
+    assert "bbox" in view["pipelines"][0]["cap"]            # capability tag reflects provenance
+
+
+def test_score_case_maps_pass_and_failure_cases():
+    from ezpz.core.score import FieldScore as FS
+
+    def mk(passed, case):
+        return FS(doc_id="d", pipeline_id="p", field="f", scorer="s",
+                  value=0.0, passed=passed, detail={"case": case})
+    assert D._score_case(mk(True, "")) == "correct"
+    assert D._score_case(mk(False, "hallucination")) == "hallucinated"
+    assert D._score_case(mk(False, "wrongly_absent")) == "missing"
+    assert D._score_case(mk(False, "parse_failure")) == "parse_error"
+    assert D._score_case(mk(False, "")) == "wrong"
 
 
 def test_failure_rows_normalize_case_and_join_expected(tmp_path):

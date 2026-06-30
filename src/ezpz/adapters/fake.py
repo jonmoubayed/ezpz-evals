@@ -7,7 +7,7 @@ from typing import Any
 from ezpz.adapters.base import Capabilities, Pipeline
 from ezpz.adapters.registry import register
 from ezpz.core.document import Document
-from ezpz.core.result import Cost, FieldValue
+from ezpz.core.result import Cost, FieldValue, Provenance
 from ezpz.core.task import Task
 
 
@@ -46,8 +46,18 @@ class FakePipeline(Pipeline):
     def map(self, raw: Any, task: Task) -> dict[str, FieldValue]:
         # Structural map only; value-normalization happens centrally, later, in the engine.
         confidence = raw.get("__confidence__", 1.0)
+        # Optionally emit text-span provenance (config emit_provenance) so the viewer's source
+        # tracer is demonstrable with no real provenance-emitting tool. text_span = the raw value,
+        # which (for correct predictions) appears verbatim in the source document.
+        emit_prov = self.config.config.get("emit_provenance", False)
+
+        def prov(value: Any):
+            if not emit_prov or value in (None, ""):
+                return None
+            return Provenance(page=1, text_span=str(value))
+
         return {
-            name: FieldValue(value=value, confidence=confidence)
+            name: FieldValue(value=value, confidence=confidence, provenance=prov(value))
             for name, value in raw.items()
             if name != "__confidence__"
         }

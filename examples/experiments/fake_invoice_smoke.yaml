@@ -7,6 +7,7 @@ pipelines:
   - adapter: fake
     config:
       label: accurate
+      emit_provenance: true          # demo the source tracer: text-span provenance per field
       by_slug:
         inv-001:
           invoice_number: "INV-001"
